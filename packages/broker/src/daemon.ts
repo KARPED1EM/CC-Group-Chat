@@ -18,7 +18,18 @@ import { startWsServer, type RunningWsServer } from './ws-server.ts'
 const stateDir = getDefaultStateDir()
 const port = getBrokerPort()
 const authToken = await ensureAuthToken(stateDir)
-const broker = new Broker({ authToken })
+
+const broker = new Broker({
+  authToken,
+  room: {
+    hardCap: getEnvPositiveInt('CC_GROUP_CHAT_HARD_CAP'),
+    stormGuardOptions: {
+      everyoneIntervalMs: getEnvPositiveInt('CC_GROUP_CHAT_EVERYONE_COOLDOWN_MS'),
+      perMemberWakeBudget: getEnvPositiveInt('CC_GROUP_CHAT_WAKE_BUDGET'),
+      perMemberWindowMs: getEnvPositiveInt('CC_GROUP_CHAT_WAKE_WINDOW_MS'),
+    },
+  },
+})
 
 let server: RunningWsServer
 try {
@@ -57,4 +68,12 @@ function isEAddrInUse(err: unknown): boolean {
   if (typeof err !== 'object' || err === null) return false
   const code = (err as { code?: unknown }).code
   return code === 'EADDRINUSE'
+}
+
+/** Returns undefined when the env var is absent or not a positive integer, letting the caller fall back to its default. */
+function getEnvPositiveInt(name: string): number | undefined {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return undefined
+  const n = Number(raw)
+  return Number.isInteger(n) && n > 0 ? n : undefined
 }

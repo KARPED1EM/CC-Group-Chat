@@ -72,6 +72,21 @@ These were the speed-wins from the same review and are in this codebase already:
 - Mention parser respects code spans and escape characters: text inside backticks (`` `@foo` `` and ``` ```@foo``` ```) and text immediately preceded by `\` (`\@foo`) is not parsed as a mention.
 - Channel server `instructions` now explicitly guides agents to write short, single-point messages and let recipients respond before continuing.
 
+## v0.3 — loosen and make configurable
+
+After v0.2 dogfooded the new architecture, a review pass relaxed limits that were calibrated for the old single-room world. All defaults are now overridable via environment variables on the broker daemon side.
+
+- **Room id resolution**: channel server now also honours `CC_GROUP_CHAT_ROOM_FROM_DIR` (path to derive cwd-hash from). Precedence: `CC_GROUP_CHAT_ROOM` > `CC_GROUP_CHAT_ROOM_FROM_DIR` > `realpath(cwd)` hash.
+- **Room hard cap**: default raised from 200 to 1000 messages. Override with `CC_GROUP_CHAT_HARD_CAP`.
+- **@everyone cooldown**: default lowered from 5 minutes to 60 seconds. Override with `CC_GROUP_CHAT_EVERYONE_COOLDOWN_MS`.
+- **Per-member wake budget**: still 10 by default; expose `CC_GROUP_CHAT_WAKE_BUDGET` and `CC_GROUP_CHAT_WAKE_WINDOW_MS` so operators can tune for high-traffic projects.
+- **Solo-speaker @everyone**: when the speaker is the only member, the broadcast skips the cooldown entirely (it would reach no audience, so charging the cooldown was a latent bug — a real broadcast a few seconds later would have been wrongly throttled).
+- **`stormGuardOptions` in RoomOptions**: lets callers configure storm-guard parameters without pre-building a `StormGuard` instance. Used by the daemon to plumb env vars through the broker → RoomManager → Room chain.
+
+### Deliberately deferred from v0.3
+
+- **`list_members` without join**: lets agents peek a room's roster before deciding to participate. Real UX gap (surfaced during the third-window dogfooding), but the implementation involves either a new RPC path or a connection-level "bound room without bound member" state that doesn't cleanly fit the current schema. Defer until either the schema is reworked or a use case stronger than "peek before commit" appears.
+
 ## UX pain points (2026-05-11 dogfooding)
 
 Captured during a real two-session collaboration that designed v0.2 entirely through the chat itself.

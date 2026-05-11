@@ -14,7 +14,7 @@ export interface StormGuardOptions {
 const DEFAULTS = {
   perMemberWakeBudget: 10,
   perMemberWindowMs: 5 * 60 * 1000,
-  everyoneIntervalMs: 5 * 60 * 1000,
+  everyoneIntervalMs: 60 * 1000,
 } as const
 
 export class StormGuard {

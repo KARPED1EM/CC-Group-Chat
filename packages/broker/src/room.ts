@@ -1,12 +1,12 @@
 import type { Engagement, Member, RoomMessage, SpeakResult } from '@cc-group-chat/shared'
 import { ChatError } from './errors.ts'
 import { EVERYONE, parseMentions } from './mentions.ts'
-import { StormGuard } from './storm-guard.ts'
+import { StormGuard, type StormGuardOptions } from './storm-guard.ts'
 
 const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
 const RESERVED_NAMES: ReadonlySet<string> = new Set([EVERYONE])
 const MAX_DESCRIPTION_LENGTH = 280
-const DEFAULT_HARD_CAP = 200
+const DEFAULT_HARD_CAP = 1000
 const DEFAULT_ENGAGEMENT_WINDOW_MS = 60_000
 const DEFAULT_ROOM_ID = 'default'
 
@@ -15,7 +15,13 @@ export interface RoomOptions {
   readonly id?: string
   readonly now?: () => number
   readonly hardCap?: number
+  /** Pre-built storm guard. Takes precedence over `stormGuardOptions`. */
   readonly stormGuard?: StormGuard
+  /**
+   * Options for the storm guard the room creates if `stormGuard` is not
+   * provided. `now` is inherited from the room.
+   */
+  readonly stormGuardOptions?: Omit<StormGuardOptions, 'now'>
   /**
    * Time since a member's last activity before they are reported as `idle`.
    * Defaults to 60 seconds.
@@ -54,7 +60,10 @@ export class Room {
     this.#id = opts.id ?? DEFAULT_ROOM_ID
     this.#now = opts.now ?? Date.now
     this.#hardCap = opts.hardCap ?? DEFAULT_HARD_CAP
-    this.#stormGuard = opts.stormGuard ?? new StormGuard({ now: this.#now })
+    this.#stormGuard = opts.stormGuard ?? new StormGuard({
+      now: this.#now,
+      ...opts.stormGuardOptions,
+    })
     this.#engagementWindowMs = opts.engagementWindowMs ?? DEFAULT_ENGAGEMENT_WINDOW_MS
   }
 
@@ -180,7 +189,13 @@ export class Room {
     }
     let everyoneThrottled = false
     if (everyoneRequested) {
-      if (this.#stormGuard.tryTriggerEveryone()) {
+      // Skip the cooldown entirely when the speaker is the only member —
+      // the broadcast would reach no one, so charging the cooldown is a
+      // bug-by-design (the next real @everyone could be wrongly blocked).
+      const otherMembersExist = this.#otherMembersExist(speaker)
+      if (!otherMembersExist) {
+        // no-op: nothing to deliver, no cooldown charge
+      } else if (this.#stormGuard.tryTriggerEveryone()) {
         for (const name of this.#members.keys()) targets.add(name)
       } else {
         everyoneThrottled = true
@@ -188,5 +203,12 @@ export class Room {
     }
     targets.delete(speaker)
     return { targets: [...targets], everyoneThrottled }
+  }
+
+  #otherMembersExist(speaker: string): boolean {
+    for (const name of this.#members.keys()) {
+      if (name !== speaker) return true
+    }
+    return false
   }
 }

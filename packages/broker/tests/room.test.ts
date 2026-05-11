@@ -202,6 +202,34 @@ describe('Room', () => {
       expect(r2.delivered).toEqual([])
     })
 
+    test('a solo speaker @everyone does not burn the cooldown', () => {
+      const guard = new StormGuard({ now, everyoneIntervalMs: 60_000 })
+      const solo = new Room({ now, stormGuard: guard })
+      solo.join('A', '')
+      // A is alone — first @everyone has no audience and must not record the trigger.
+      const r1 = solo.speak('A', '@everyone hi there')
+      expect(r1.delivered).toEqual([])
+      expect(r1.everyoneThrottled).toBe(false)
+      // Bring in B and broadcast immediately — should succeed because the cooldown was preserved.
+      solo.join('B', '')
+      const r2 = solo.speak('A', '@everyone now you exist')
+      expect(r2.delivered).toEqual(['B'])
+      expect(r2.everyoneThrottled).toBe(false)
+    })
+
+    test('Room creates a storm guard from stormGuardOptions when no instance is provided', () => {
+      const tight = new Room({
+        now,
+        stormGuardOptions: { perMemberWakeBudget: 1, perMemberWindowMs: 60_000 },
+      })
+      tight.join('A', '')
+      tight.join('B', '')
+      tight.speak('A', '@B 1')
+      const r2 = tight.speak('A', '@B 2')
+      expect(r2.delivered).toEqual([])
+      expect(r2.throttled).toEqual(['B'])
+    })
+
     test('per-name mentions still deliver when @everyone is throttled', () => {
       const guard = new StormGuard({ now, everyoneIntervalMs: 60_000 })
       const r = new Room({ now, stormGuard: guard })

@@ -12,14 +12,14 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import {
   METHOD,
-  getDefaultRoomId,
   type RoomMessage,
   type SpeakResult,
 } from '@cc-group-chat/shared'
 import { connectToBroker } from './broker-client.ts'
+import { resolveRoomId } from './resolve-room.ts'
 import { RpcClient, RpcError } from './rpc-client.ts'
 
-const ROOM_ID = process.env.CC_GROUP_CHAT_ROOM ?? getDefaultRoomId()
+const ROOM_ID = resolveRoomId()
 
 const PLUGIN_NAME = 'cc-group-chat'
 const PLUGIN_VERSION = '0.1.0'
@@ -34,7 +34,7 @@ Tools:
 - \`list_members\`: see the current roster.
 - \`leave\`: unregister. Closing this Claude Code session also implicitly leaves.
 
-You are in room \`${ROOM_ID}\`. The room id is fixed for this Claude Code session by the user's setup (the \`CC_GROUP_CHAT_ROOM\` environment variable, or a hash of the working directory if unset). You cannot join a different room from this session.
+You are in room \`${ROOM_ID}\`. The room id is fixed for this Claude Code session by the user's setup (the \`CC_GROUP_CHAT_ROOM\` or \`CC_GROUP_CHAT_ROOM_FROM_DIR\` environment variables, or a hash of the working directory if unset). You cannot join a different room from this session.
 
 Channel events arrive as <channel source="${PLUGIN_NAME}" room="..." from="..." message_id="...">. You receive an event ONLY when you are addressed (directly @ed, or via @everyone). Other members' chatter does not reach you.
 
