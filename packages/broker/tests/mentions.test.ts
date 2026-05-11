@@ -58,4 +58,38 @@ describe('parseMentions', () => {
   test('rejects names that do not start with a letter', () => {
     expect(parseMentions('@123abc')).toEqual([])
   })
+
+  describe('code-span and escape handling', () => {
+    test('ignores mentions inside an inline backtick span', () => {
+      expect(parseMentions('use `@name` as a placeholder')).toEqual([])
+    })
+
+    test('still picks up mentions outside the backtick span', () => {
+      expect(parseMentions('use `@name` and then @Bob')).toEqual(['Bob'])
+    })
+
+    test('ignores mentions inside a fenced code block', () => {
+      expect(parseMentions('here is code:\n```\n@Bob and @Alice\n```\n')).toEqual([])
+    })
+
+    test('still picks up mentions outside a fenced code block', () => {
+      expect(parseMentions('```\n@Inside\n```\nbut @Outside is real')).toEqual(['Outside'])
+    })
+
+    test('treats `\\@name` as an escaped literal', () => {
+      expect(parseMentions('this is literal: \\@name')).toEqual([])
+    })
+
+    test('still picks up unescaped mentions in the same text', () => {
+      expect(parseMentions('escaped \\@nope but real @Bob')).toEqual(['Bob'])
+    })
+
+    test('handles a backtick span at the start of input', () => {
+      expect(parseMentions('`@nope` @real')).toEqual(['real'])
+    })
+
+    test('handles an inline span that contains spaces and punctuation', () => {
+      expect(parseMentions('see `address members by @name` and reply to @Carol')).toEqual(['Carol'])
+    })
+  })
 })

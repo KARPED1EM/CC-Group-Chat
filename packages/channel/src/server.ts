@@ -14,6 +14,7 @@ import {
   METHOD,
   getDefaultStateDir,
   type RoomMessage,
+  type SpeakResult,
 } from '@cc-group-chat/shared'
 import { connectToBroker } from './broker-client.ts'
 import { RpcClient, RpcError } from './rpc-client.ts'
@@ -32,6 +33,8 @@ Tools:
 - \`leave\`: unregister. Closing this Claude Code session also implicitly leaves.
 
 Channel events arrive as <channel source="${PLUGIN_NAME}" from="..." message_id="...">. You receive an event ONLY when you are addressed (directly @ed, or via @everyone). Other members' chatter does not reach you.
+
+KEEP MESSAGES SHORT. Send one point per message and let the recipient respond before adding the next. Long monolithic messages (~400+ characters) create coordination friction because the recipient has to absorb your entire essay before they can engage, and you cannot pause mid-essay to look something up. Break a complex thought into several \`speak\` calls connected by the natural rhythm of replies. If you need to put a literal \`@name\` in your text without addressing anyone, wrap it in backticks (\`\\\`@name\\\`\`) or escape with a backslash (\`\\\\@name\`).
 
 Sending nothing in response is valid. Do NOT politely acknowledge messages you have no real input on — silence is the correct behaviour when the message is not relevant to you, you have no useful information, or you are busy with the user's own work.\
 `
@@ -57,7 +60,7 @@ const TOOLS = [
   },
   {
     name: 'speak',
-    description: 'Send a message to the group chat. @<name> wakes that member; @everyone broadcasts; messages without any @ are appended to history without waking anyone.',
+    description: 'Send a message to the group chat. @<name> wakes that member; @everyone broadcasts; messages without any @ are appended to history without waking anyone. Prefer short single-point messages and let the recipient reply before continuing — the recipient has no way to read a partial message.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -137,7 +140,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   }
   try {
     const result = await rpc.call(rpcMethod, req.params.arguments ?? {})
-    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] }
+    return { content: [{ type: 'text', text: formatToolResult(req.params.name, result) }] }
   } catch (err) {
     if (err instanceof RpcError) {
       const code = (err.data as { code?: string } | undefined)?.code ?? 'RPC_ERROR'
@@ -154,3 +157,22 @@ conn.ws.addEventListener('close', () => {
 })
 
 await mcp.connect(new StdioServerTransport())
+
+/**
+ * Trim the broker response shown to the caller. The `speak` call returns a
+ * full `SpeakResult` whose `message.text` is the speaker's own text echoed
+ * back — keeping it in the tool result wastes tokens since the caller already
+ * has it. Other calls return concise data that we pretty-print as-is.
+ */
+function formatToolResult(toolName: string, result: unknown): string {
+  if (toolName === 'speak') {
+    const r = result as SpeakResult
+    return JSON.stringify({
+      id: r.message.id,
+      delivered: r.delivered,
+      throttled: r.throttled,
+      everyoneThrottled: r.everyoneThrottled,
+    })
+  }
+  return JSON.stringify(result, null, 2)
+}
