@@ -74,6 +74,51 @@ describe('Broker', () => {
     })
   })
 
+  describe('auth token', () => {
+    test('a broker configured with a token accepts matching joins', () => {
+      const authed = new Broker({ room: { now }, authToken: 'secret' })
+      const h = authed.connect(() => {})
+      expect(() => authed.join(h, { name: 'A', description: '', authToken: 'secret' })).not.toThrow()
+    })
+
+    test('rejects a join with a wrong token (BAD_AUTH)', () => {
+      const authed = new Broker({ room: { now }, authToken: 'secret' })
+      const h = authed.connect(() => {})
+      expectChatError(
+        () => authed.join(h, { name: 'A', description: '', authToken: 'wrong' }),
+        'BAD_AUTH',
+      )
+    })
+
+    test('rejects a join that omits the token (BAD_AUTH)', () => {
+      const authed = new Broker({ room: { now }, authToken: 'secret' })
+      const h = authed.connect(() => {})
+      expectChatError(
+        () => authed.join(h, { name: 'A', description: '' }),
+        'BAD_AUTH',
+      )
+    })
+
+    test('a broker without a configured token accepts joins regardless of the token field', () => {
+      const open = new Broker({ room: { now } })
+      const h1 = open.connect(() => {})
+      const h2 = open.connect(() => {})
+      expect(() => open.join(h1, { name: 'A', description: '', authToken: 'any' })).not.toThrow()
+      expect(() => open.join(h2, { name: 'B', description: '' })).not.toThrow()
+    })
+
+    test('BAD_AUTH does not bind the connection (it can retry with the right token)', () => {
+      const authed = new Broker({ room: { now }, authToken: 'secret' })
+      const h = authed.connect(() => {})
+      expectChatError(
+        () => authed.join(h, { name: 'A', description: '', authToken: 'wrong' }),
+        'BAD_AUTH',
+      )
+      // Should be able to retry with the right token
+      expect(() => authed.join(h, { name: 'A', description: '', authToken: 'secret' })).not.toThrow()
+    })
+  })
+
   describe('speak and push routing', () => {
     test('pushes the message to a mentioned member', () => {
       const aRec = recorder()

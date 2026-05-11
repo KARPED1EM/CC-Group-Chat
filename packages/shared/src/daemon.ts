@@ -1,14 +1,29 @@
-// State file used by the broker daemon to advertise its address and by the
-// channel client to discover it. The file lives at `<stateDir>/broker.json`
-// where `stateDir` defaults to `~/.cc-group-chat`. Paths are passed in
-// explicitly so tests can substitute a temp directory.
+// Broker discovery and credentials shared between the daemon and channel-side
+// clients.
+//
+// Discovery uses a username-derived TCP port (`getBrokerPort`) — the kernel's
+// bind/listen is the source of truth for "is there a broker", and the port is
+// per-user so distinct OS users cannot accidentally share a chat. The
+// `broker.json` state file is kept as observation metadata only (pid,
+// startedAt, port for ops/debugging); it is not on the discovery critical
+// path.
+//
+// Cross-user safety is reinforced by an auth token at
+// `<stateDir>/auth-token`, written `0600` on POSIX. Only processes the OS
+// trusts to read the user's home can read it; the channel client supplies it
+// to `join` and the broker rejects mismatches.
 
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, userInfo } from 'node:os'
 import { join } from 'node:path'
 
 const STATE_FILE_NAME = 'broker.json'
+const AUTH_TOKEN_FILE_NAME = 'auth-token'
 const TMP_SUFFIX = '.tmp'
+
+const PORT_BASE = 47000
+const PORT_RANGE = 1000
 
 export const STATE_FILE_VERSION = '0'
 
@@ -26,6 +41,19 @@ export interface BrokerStateFile {
 export function getDefaultStateDir(): string {
   return join(homedir(), '.cc-group-chat')
 }
+
+/**
+ * Derive the broker's TCP port from the local username. Distinct users on a
+ * shared host get distinct ports, so the kernel-level bind contention also
+ * doubles as cross-user isolation.
+ */
+export function getBrokerPort(username?: string): number {
+  const name = username ?? userInfo().username
+  const digest = createHash('sha256').update(name).digest()
+  return PORT_BASE + (digest.readUInt32BE(0) % PORT_RANGE)
+}
+
+// ===== State file (observation metadata only — not on discovery path) =====
 
 /** Returns null when the file is absent or malformed. Never throws. */
 export async function readStateFile(stateDir: string): Promise<BrokerStateFile | null> {
@@ -52,6 +80,46 @@ export async function writeStateFile(stateDir: string, state: BrokerStateFile): 
 export async function removeStateFile(stateDir: string): Promise<void> {
   const filePath = join(stateDir, STATE_FILE_NAME)
   await rm(filePath, { force: true }).catch(() => { /* ignore */ })
+}
+
+// ===== Auth token =====
+
+export function getAuthTokenPath(stateDir: string): string {
+  return join(stateDir, AUTH_TOKEN_FILE_NAME)
+}
+
+/** Returns the token string or null if the file does not exist. */
+export async function readAuthToken(stateDir: string): Promise<string | null> {
+  try {
+    const raw = await readFile(getAuthTokenPath(stateDir), 'utf8')
+    const trimmed = raw.trim()
+    return trimmed.length > 0 ? trimmed : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Writes the token with `0600` permissions. On Windows the mode is honoured
+ * by the runtime where supported; in any case the file sits in the user's
+ * home directory and is protected by the directory ACLs.
+ */
+export async function writeAuthToken(stateDir: string, token: string): Promise<void> {
+  await mkdir(stateDir, { recursive: true })
+  await writeFile(getAuthTokenPath(stateDir), token, { encoding: 'utf8', mode: 0o600 })
+}
+
+export function generateAuthToken(): string {
+  return randomBytes(32).toString('hex')
+}
+
+/** Read the persisted token; generate and persist a fresh one if missing. */
+export async function ensureAuthToken(stateDir: string): Promise<string> {
+  const existing = await readAuthToken(stateDir)
+  if (existing) return existing
+  const fresh = generateAuthToken()
+  await writeAuthToken(stateDir, fresh)
+  return fresh
 }
 
 function isBrokerStateFile(x: unknown): x is BrokerStateFile {

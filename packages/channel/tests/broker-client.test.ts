@@ -2,93 +2,74 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  STATE_FILE_VERSION,
-  writeStateFile,
-  removeStateFile,
-  type BrokerStateFile,
-} from '@cc-group-chat/shared'
+import { writeAuthToken } from '@cc-group-chat/shared'
 import { Broker, startWsServer, type RunningWsServer } from '@cc-group-chat/broker'
 import { connectToBroker } from '../src/broker-client.ts'
 
 describe('connectToBroker', () => {
   let dir: string
   let server: RunningWsServer
+  const aux: RunningWsServer[] = []
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'cc-cb-test-'))
     server = startWsServer(new Broker())
+    await writeAuthToken(dir, 'test-token')
   })
 
   afterEach(async () => {
     await server.stop()
+    while (aux.length > 0) {
+      const s = aux.pop()
+      if (s) await s.stop()
+    }
     await rm(dir, { recursive: true, force: true })
   })
 
-  async function writeServerState(): Promise<void> {
-    const state: BrokerStateFile = {
-      version: STATE_FILE_VERSION,
-      pid: process.pid,
-      port: server.port,
-      startedAt: Date.now(),
-    }
-    await writeStateFile(dir, state)
-  }
-
-  test('connects to an existing broker advertised in the state file', async () => {
-    await writeServerState()
+  test('connects on first try when the broker is already listening', async () => {
     const conn = await connectToBroker({
       stateDir: dir,
+      port: server.port,
       spawn: () => { throw new Error('should not spawn when broker is already up') },
     })
     expect(conn.ws.readyState).toBe(WebSocket.OPEN)
-    expect(conn.state.port).toBe(server.port)
+    expect(conn.port).toBe(server.port)
+    expect(conn.authToken).toBe('test-token')
     conn.ws.close()
   })
 
-  test('falls back to spawning when no state file exists', async () => {
-    let spawned = false
+  test('spawns when nothing is listening and connects after the spawn brings the broker up', async () => {
+    const newPort = server.port + 1000
+    let spawnedServer: RunningWsServer | null = null
     const conn = await connectToBroker({
       stateDir: dir,
+      port: newPort,
       spawn: () => {
-        spawned = true
-        void writeServerState()
+        spawnedServer = startWsServer(new Broker(), { port: newPort })
+        aux.push(spawnedServer)
       },
       pollIntervalMs: 20,
       timeoutMs: 2_000,
     })
-    expect(spawned).toBe(true)
+    expect(spawnedServer).not.toBeNull()
     expect(conn.ws.readyState).toBe(WebSocket.OPEN)
+    expect(conn.port).toBe(newPort)
     conn.ws.close()
   })
 
-  test('falls back to spawning when state file points at an unreachable port', async () => {
-    await writeStateFile(dir, {
-      version: STATE_FILE_VERSION,
-      pid: 999_999,
-      port: 49_999,
-      startedAt: 0,
-    })
-    let spawned = false
-    const conn = await connectToBroker({
-      stateDir: dir,
-      spawn: () => {
-        spawned = true
-        void writeServerState()
-      },
-      pollIntervalMs: 20,
-      timeoutMs: 2_000,
-    })
-    expect(spawned).toBe(true)
-    expect(conn.ws.readyState).toBe(WebSocket.OPEN)
-    expect(conn.state.port).toBe(server.port)
-    conn.ws.close()
-  })
-
-  test('throws when the broker does not come up within timeout', async () => {
-    await removeStateFile(dir)
+  test('throws when the broker is up but the auth token file is missing', async () => {
+    await rm(join(dir, 'auth-token'), { force: true })
     await expect(connectToBroker({
       stateDir: dir,
+      port: server.port,
+      spawn: () => { throw new Error('should not spawn') },
+    })).rejects.toThrow(/auth token not found/)
+  })
+
+  test('throws when nothing comes up within the timeout', async () => {
+    await expect(connectToBroker({
+      stateDir: dir,
+      port: server.port + 999,
       spawn: () => { /* never advertise */ },
       pollIntervalMs: 20,
       timeoutMs: 100,

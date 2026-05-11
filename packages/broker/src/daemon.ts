@@ -1,19 +1,35 @@
 #!/usr/bin/env bun
-// Broker daemon entry point. Brings up the WS server, advertises its address
-// via the shared state file, and removes the file on graceful shutdown.
+// Broker daemon entry. Tries to bind the username-derived port: if successful
+// it is the single broker for this user; on `EADDRINUSE` another instance won
+// the race and this process exits cleanly so the spawning client falls
+// through to its retry-connect path.
 
 import {
+  ensureAuthToken,
+  getBrokerPort,
   getDefaultStateDir,
   removeStateFile,
   STATE_FILE_VERSION,
   writeStateFile,
 } from '@cc-group-chat/shared'
 import { Broker } from './broker.ts'
-import { startWsServer } from './ws-server.ts'
+import { startWsServer, type RunningWsServer } from './ws-server.ts'
 
-const broker = new Broker()
-const server = startWsServer(broker)
 const stateDir = getDefaultStateDir()
+const port = getBrokerPort()
+const authToken = await ensureAuthToken(stateDir)
+const broker = new Broker({ authToken })
+
+let server: RunningWsServer
+try {
+  server = startWsServer(broker, { port })
+} catch (err: unknown) {
+  if (isEAddrInUse(err)) {
+    console.error(`cc-group-chat broker: port ${port} already in use, exiting (another broker won the race)`)
+    process.exit(0)
+  }
+  throw err
+}
 
 await writeStateFile(stateDir, {
   version: STATE_FILE_VERSION,
@@ -36,3 +52,9 @@ async function shutdown(signal: string): Promise<never> {
 
 process.on('SIGINT', () => { void shutdown('SIGINT') })
 process.on('SIGTERM', () => { void shutdown('SIGTERM') })
+
+function isEAddrInUse(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const code = (err as { code?: unknown }).code
+  return code === 'EADDRINUSE'
+}

@@ -12,7 +12,6 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import {
   METHOD,
-  getDefaultStateDir,
   type RoomMessage,
   type SpeakResult,
 } from '@cc-group-chat/shared'
@@ -100,7 +99,7 @@ const TOOL_TO_METHOD: Record<string, string> = {
   list_members: METHOD.ListMembers,
 }
 
-const conn = await connectToBroker({ stateDir: getDefaultStateDir() })
+const conn = await connectToBroker()
 
 const mcp = new Server(
   { name: PLUGIN_NAME, version: PLUGIN_VERSION },
@@ -138,8 +137,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
   if (rpcMethod === undefined) {
     throw new Error(`Unknown tool: ${req.params.name}`)
   }
+  const args = req.params.name === 'join'
+    ? { ...(req.params.arguments ?? {}), authToken: conn.authToken }
+    : req.params.arguments ?? {}
   try {
-    const result = await rpc.call(rpcMethod, req.params.arguments ?? {})
+    const result = await rpc.call(rpcMethod, args)
     return { content: [{ type: 'text', text: formatToolResult(req.params.name, result) }] }
   } catch (err) {
     if (err instanceof RpcError) {

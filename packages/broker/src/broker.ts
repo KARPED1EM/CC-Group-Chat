@@ -16,6 +16,18 @@ interface ConnectionState {
 export interface BrokerOptions {
   /** Options forwarded to the underlying `Room` (clock, hard cap, storm guard). */
   readonly room?: RoomOptions
+  /**
+   * If set, `join` requires this exact token in its params. If absent, the
+   * broker accepts joins regardless of the token field (used in unit tests
+   * that exercise the room state machine without the auth handshake).
+   */
+  readonly authToken?: string
+}
+
+export interface JoinRequestParams {
+  readonly name: string
+  readonly description: string
+  readonly authToken?: string
 }
 
 /**
@@ -31,12 +43,14 @@ export interface BrokerOptions {
  */
 export class Broker {
   readonly #room: Room
+  readonly #authToken: string | undefined
   readonly #connections = new Map<ConnectionHandle, ConnectionState>()
   readonly #memberToHandle = new Map<string, ConnectionHandle>()
   #nextHandleId = 1
 
   constructor(opts: BrokerOptions = {}) {
     this.#room = new Room(opts.room)
+    this.#authToken = opts.authToken
   }
 
   /** Register a new connection. Returns its handle. */
@@ -61,12 +75,18 @@ export class Broker {
     this.#connections.delete(handle)
   }
 
-  join(handle: ConnectionHandle, params: { readonly name: string; readonly description: string }): { joinedAt: number } {
+  join(handle: ConnectionHandle, params: JoinRequestParams): { joinedAt: number } {
     const conn = this.#requireConnected(handle)
     if (conn.memberName !== undefined) {
       throw new ChatError(
         'ALREADY_JOINED',
         `This connection is already joined as '${conn.memberName}'`,
+      )
+    }
+    if (this.#authToken !== undefined && params.authToken !== this.#authToken) {
+      throw new ChatError(
+        'BAD_AUTH',
+        'Auth token missing or does not match the broker',
       )
     }
     const member = this.#room.join(params.name, params.description)

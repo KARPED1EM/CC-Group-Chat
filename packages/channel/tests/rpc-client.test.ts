@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Broker, startWsServer, type RunningWsServer } from '@cc-group-chat/broker'
-import { writeStateFile, STATE_FILE_VERSION, METHOD } from '@cc-group-chat/shared'
+import { writeAuthToken, METHOD } from '@cc-group-chat/shared'
 import { connectToBroker } from '../src/broker-client.ts'
 import { RpcClient, RpcError } from '../src/rpc-client.ts'
 
@@ -18,14 +18,10 @@ describe('RpcClient', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'cc-rpc-test-'))
     server = startWsServer(new Broker({ room: { now: () => 1_700_000_000_000 } }))
-    await writeStateFile(dir, {
-      version: STATE_FILE_VERSION,
-      pid: process.pid,
-      port: server.port,
-      startedAt: Date.now(),
-    })
+    await writeAuthToken(dir, 'test-token')
     const conn = await connectToBroker({
       stateDir: dir,
+      port: server.port,
       spawn: () => { throw new Error('spawn should not run in this test') },
     })
     ws = conn.ws
@@ -64,6 +60,7 @@ describe('RpcClient', () => {
 
     const conn2 = await connectToBroker({
       stateDir: dir,
+      port: server.port,
       spawn: () => { throw new Error('spawn should not run in this test') },
     })
     aux.push(() => conn2.ws.close())

@@ -32,8 +32,14 @@ export {
 export {
   STATE_FILE_VERSION,
   getDefaultStateDir,
+  getBrokerPort,
   readStateFile,
   writeStateFile,
   removeStateFile,
+  getAuthTokenPath,
+  readAuthToken,
+  writeAuthToken,
+  generateAuthToken,
+  ensureAuthToken,
   type BrokerStateFile,
 } from './daemon.ts'

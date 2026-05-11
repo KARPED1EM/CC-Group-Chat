@@ -81,6 +81,8 @@ export type RequestEnvelope = z.infer<typeof RequestEnvelopeSchema>
 export const JoinParamsSchema = z.strictObject({
   name: z.string(),
   description: z.string(),
+  /** Optional per-user auth token. The broker only enforces it if configured with one. */
+  authToken: z.string().optional(),
 })
 export type JoinParams = z.infer<typeof JoinParamsSchema>
 

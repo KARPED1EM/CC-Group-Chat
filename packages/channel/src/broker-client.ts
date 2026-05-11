@@ -1,18 +1,26 @@
-import { readStateFile, type BrokerStateFile } from '@cc-group-chat/shared'
+import {
+  getBrokerPort,
+  getDefaultStateDir,
+  readAuthToken,
+} from '@cc-group-chat/shared'
 import { resolve } from 'node:path'
 
 export interface BrokerConnection {
   readonly ws: WebSocket
-  readonly state: BrokerStateFile
+  readonly authToken: string
+  readonly port: number
 }
 
 export interface ConnectToBrokerOptions {
-  readonly stateDir: string
+  /** Defaults to `~/.cc-group-chat`. */
+  readonly stateDir?: string
+  /** Override the username-derived broker port. Used by tests. */
+  readonly port?: number
   /** Override for tests. Default spawns the broker daemon detached. */
   readonly spawn?: () => void
   /** How long to wait for a freshly-spawned broker to come up. Default 5000ms. */
   readonly timeoutMs?: number
-  /** How often to poll for the state file / open the WebSocket. Default 100ms. */
+  /** How often to poll the broker port while waiting. Default 100ms. */
   readonly pollIntervalMs?: number
 }
 
@@ -22,33 +30,44 @@ const DEFAULT_POLL_MS = 100
 /**
  * Open a WebSocket connection to the local broker daemon.
  *
- * Tries the broker advertised in the state file first. If the file is missing
- * or the advertised port no longer answers, spawns a new broker and waits for
- * it to register itself.
+ * Discovery is purely port-based: we know the broker's port from the local
+ * username, try to connect, and if nothing answers we spawn a daemon and
+ * retry. The `~/.cc-group-chat/broker.json` state file is metadata only; it
+ * is not consulted for discovery.
+ *
+ * The returned connection includes the per-user auth token read from
+ * `~/.cc-group-chat/auth-token`, which the caller passes to the `join` RPC.
  */
-export async function connectToBroker(opts: ConnectToBrokerOptions): Promise<BrokerConnection> {
+export async function connectToBroker(opts: ConnectToBrokerOptions = {}): Promise<BrokerConnection> {
+  const stateDir = opts.stateDir ?? getDefaultStateDir()
+  const port = opts.port ?? getBrokerPort()
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_MS
   const doSpawn = opts.spawn ?? defaultSpawn
 
-  const existing = await readStateFile(opts.stateDir)
-  if (existing) {
-    const ws = await tryOpen(existing.port)
-    if (ws) return { ws, state: existing }
-  }
-
-  doSpawn()
-
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    await sleep(pollIntervalMs)
-    const state = await readStateFile(opts.stateDir)
-    if (state) {
-      const ws = await tryOpen(state.port)
-      if (ws) return { ws, state }
+  let ws = await tryOpen(port)
+  if (!ws) {
+    doSpawn()
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      await sleep(pollIntervalMs)
+      ws = await tryOpen(port)
+      if (ws) break
+    }
+    if (!ws) {
+      throw new Error(`cc-group-chat: broker did not come up on port ${port} within ${timeoutMs}ms`)
     }
   }
-  throw new Error(`cc-group-chat: broker did not come up within ${timeoutMs}ms`)
+
+  const authToken = await readAuthToken(stateDir)
+  if (!authToken) {
+    ws.close()
+    throw new Error(
+      `cc-group-chat: broker is up but auth token not found at ${stateDir}/auth-token`,
+    )
+  }
+
+  return { ws, authToken, port }
 }
 
 function tryOpen(port: number): Promise<WebSocket | null> {
