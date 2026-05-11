@@ -102,6 +102,13 @@ describe('Room', () => {
       expect(room.history()).toHaveLength(2)
     })
 
+    test('stamps the room id onto every emitted message', () => {
+      const named = new Room({ id: 'project-x', now })
+      named.join('A', '')
+      const r = named.speak('A', 'hi')
+      expect(r.message.roomId).toBe('project-x')
+    })
+
     test('@target delivers to that member only', () => {
       room.join('A', '')
       room.join('B', '')

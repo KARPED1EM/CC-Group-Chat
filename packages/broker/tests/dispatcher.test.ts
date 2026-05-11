@@ -28,7 +28,7 @@ describe('dispatch', () => {
   }
 
   test('routes join and returns success with joinedAt', () => {
-    const r = send({ jsonrpc: '2.0', id: 1, method: 'join', params: { name: 'A', description: '' } }) as RpcSuccess
+    const r = send({ jsonrpc: '2.0', id: 1, method: 'join', params: { roomId: 'main', name: 'A', description: '' } }) as RpcSuccess
     expect(r).toMatchObject({
       jsonrpc: '2.0',
       id: 1,
@@ -37,7 +37,7 @@ describe('dispatch', () => {
   })
 
   test('routes speak after join and returns SpeakResult', () => {
-    send({ jsonrpc: '2.0', id: 1, method: 'join', params: { name: 'A', description: '' } })
+    send({ jsonrpc: '2.0', id: 1, method: 'join', params: { roomId: 'main', name: 'A', description: '' } })
     const r = send({ jsonrpc: '2.0', id: 2, method: 'speak', params: { text: 'hi' } }) as RpcSuccess
     const result = r.result as { message: { text: string }; delivered: string[]; everyoneThrottled: boolean }
     expect(result.message.text).toBe('hi')
@@ -70,7 +70,7 @@ describe('dispatch', () => {
   })
 
   test('returns InvalidParams for a wrongly-typed join name', () => {
-    const r = send({ jsonrpc: '2.0', id: 3, method: 'join', params: { name: 42, description: '' } }) as RpcError
+    const r = send({ jsonrpc: '2.0', id: 3, method: 'join', params: { roomId: 'main', name: 42, description: '' } }) as RpcError
     expect(r.error.code).toBe(RPC_ERROR_CODES.InvalidParams)
   })
 
@@ -81,17 +81,17 @@ describe('dispatch', () => {
   })
 
   test('extra keys on the envelope are rejected as InvalidRequest', () => {
-    const r = send({ jsonrpc: '2.0', id: 1, method: 'join', params: { name: 'A', description: '' }, extra: 'x' }) as RpcError
+    const r = send({ jsonrpc: '2.0', id: 1, method: 'join', params: { roomId: 'main', name: 'A', description: '' }, extra: 'x' }) as RpcError
     expect(r.error.code).toBe(RPC_ERROR_CODES.InvalidRequest)
   })
 
   test('extra keys on params are rejected as InvalidParams', () => {
-    const r = send({ jsonrpc: '2.0', id: 1, method: 'join', params: { name: 'A', description: '', extra: 1 } }) as RpcError
+    const r = send({ jsonrpc: '2.0', id: 1, method: 'join', params: { roomId: 'main', name: 'A', description: '', extra: 1 } }) as RpcError
     expect(r.error.code).toBe(RPC_ERROR_CODES.InvalidParams)
   })
 
   test('leave returns an empty object', () => {
-    send({ jsonrpc: '2.0', id: 1, method: 'join', params: { name: 'A', description: '' } })
+    send({ jsonrpc: '2.0', id: 1, method: 'join', params: { roomId: 'main', name: 'A', description: '' } })
     const r = send({ jsonrpc: '2.0', id: 2, method: 'leave', params: {} }) as RpcSuccess
     expect(r.result).toEqual({})
   })
@@ -99,7 +99,7 @@ describe('dispatch', () => {
 
 describe('formatRoomEventNotification', () => {
   test('formats a JSON-RPC notification with method=room_event and no id', () => {
-    const event = { id: 1, from: 'A', text: 'hi', at: 0, mentions: [] }
+    const event = { id: 1, roomId: 'main', from: 'A', text: 'hi', at: 0, mentions: [] }
     const parsed = JSON.parse(formatRoomEventNotification(event)) as Record<string, unknown>
     expect(parsed).toEqual({
       jsonrpc: JSON_RPC_VERSION,

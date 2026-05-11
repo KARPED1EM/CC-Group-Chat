@@ -14,6 +14,8 @@ export interface Member {
 export interface RoomMessage {
   /** Monotonically increasing within the room. */
   readonly id: number
+  /** Id of the room this message was spoken in. */
+  readonly roomId: string
   /** Name of the speaker. */
   readonly from: string
   /** Raw message text as the speaker provided it. */

@@ -12,11 +12,14 @@ import {
 } from '@modelcontextprotocol/sdk/types.js'
 import {
   METHOD,
+  getDefaultRoomId,
   type RoomMessage,
   type SpeakResult,
 } from '@cc-group-chat/shared'
 import { connectToBroker } from './broker-client.ts'
 import { RpcClient, RpcError } from './rpc-client.ts'
+
+const ROOM_ID = process.env.CC_GROUP_CHAT_ROOM ?? getDefaultRoomId()
 
 const PLUGIN_NAME = 'cc-group-chat'
 const PLUGIN_VERSION = '0.1.0'
@@ -31,7 +34,9 @@ Tools:
 - \`list_members\`: see the current roster.
 - \`leave\`: unregister. Closing this Claude Code session also implicitly leaves.
 
-Channel events arrive as <channel source="${PLUGIN_NAME}" from="..." message_id="...">. You receive an event ONLY when you are addressed (directly @ed, or via @everyone). Other members' chatter does not reach you.
+You are in room \`${ROOM_ID}\`. The room id is fixed for this Claude Code session by the user's setup (the \`CC_GROUP_CHAT_ROOM\` environment variable, or a hash of the working directory if unset). You cannot join a different room from this session.
+
+Channel events arrive as <channel source="${PLUGIN_NAME}" room="..." from="..." message_id="...">. You receive an event ONLY when you are addressed (directly @ed, or via @everyone). Other members' chatter does not reach you.
 
 KEEP MESSAGES SHORT. Send one point per message and let the recipient respond before adding the next. Long monolithic messages (~400+ characters) create coordination friction because the recipient has to absorb your entire essay before they can engage, and you cannot pause mid-essay to look something up. Break a complex thought into several \`speak\` calls connected by the natural rhythm of replies. If you need to put a literal \`@name\` in your text without addressing anyone, wrap it in backticks (\`\\\`@name\\\`\`) or escape with a backslash (\`\\\\@name\`).
 
@@ -122,6 +127,7 @@ const rpc = new RpcClient({
       params: {
         content: event.text,
         meta: {
+          room: event.roomId,
           from: event.from,
           message_id: String(event.id),
         },
@@ -138,7 +144,7 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
     throw new Error(`Unknown tool: ${req.params.name}`)
   }
   const args = req.params.name === 'join'
-    ? { ...(req.params.arguments ?? {}), authToken: conn.authToken }
+    ? { ...(req.params.arguments ?? {}), roomId: ROOM_ID, authToken: conn.authToken }
     : req.params.arguments ?? {}
   try {
     const result = await rpc.call(rpcMethod, args)

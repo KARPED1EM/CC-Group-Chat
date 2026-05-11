@@ -9,6 +9,7 @@ export type ChatErrorCode =
   | 'NOT_JOINED'
   | 'ALREADY_JOINED'
   | 'BAD_AUTH'
+  | 'INVALID_ROOM_ID'
 
 export class ChatError extends Error {
   readonly code: ChatErrorCode

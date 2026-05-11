@@ -14,6 +14,7 @@
 // to `join` and the broker rejects mismatches.
 
 import { createHash, randomBytes } from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir, userInfo } from 'node:os'
 import { join } from 'node:path'
@@ -51,6 +52,24 @@ export function getBrokerPort(username?: string): number {
   const name = username ?? userInfo().username
   const digest = createHash('sha256').update(name).digest()
   return PORT_BASE + (digest.readUInt32BE(0) % PORT_RANGE)
+}
+
+/**
+ * Derive a deterministic room id from the current working directory. Sessions
+ * launched in the same project directory naturally rendezvous in the same
+ * room without any explicit configuration. The path is canonicalised through
+ * `realpathSync` so symlinks and case differences on Windows do not
+ * fragment the room id.
+ */
+export function getDefaultRoomId(cwd: string = process.cwd()): string {
+  let canonical = cwd
+  try {
+    canonical = realpathSync(cwd)
+  } catch {
+    // Fall back to the supplied path if it cannot be canonicalised.
+  }
+  const hash = createHash('sha256').update(canonical).digest('hex').slice(0, 8)
+  return `auto-${hash}`
 }
 
 // ===== State file (observation metadata only — not on discovery path) =====

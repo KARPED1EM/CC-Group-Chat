@@ -39,7 +39,7 @@ describe('Broker', () => {
 
     test('methods on an unknown handle throw NOT_CONNECTED', () => {
       const fake: symbol = Symbol('fake')
-      expectChatError(() => broker.join(fake, { name: 'A', description: '' }), 'NOT_CONNECTED')
+      expectChatError(() => broker.join(fake, { roomId: 'main', name: 'A', description: '' }), 'NOT_CONNECTED')
       expectChatError(() => broker.speak(fake, { text: 'hi' }), 'NOT_CONNECTED')
       expectChatError(() => broker.leave(fake), 'NOT_CONNECTED')
       expectChatError(() => broker.listMembers(fake), 'NOT_CONNECTED')
@@ -50,15 +50,15 @@ describe('Broker', () => {
   describe('join', () => {
     test('binds the member name to the connection and returns join time', () => {
       const h = broker.connect(() => {})
-      const r = broker.join(h, { name: 'Alice', description: 'engineer' })
+      const r = broker.join(h, { roomId: 'main', name: 'Alice', description: 'engineer' })
       expect(r.joinedAt).toBe(clock)
     })
 
     test('a second join on the same connection throws ALREADY_JOINED', () => {
       const h = broker.connect(() => {})
-      broker.join(h, { name: 'Alice', description: '' })
+      broker.join(h, { roomId: 'main', name: 'Alice', description: '' })
       expectChatError(
-        () => broker.join(h, { name: 'Bob', description: '' }),
+        () => broker.join(h, { roomId: 'main', name: 'Bob', description: '' }),
         'ALREADY_JOINED',
       )
     })
@@ -66,10 +66,79 @@ describe('Broker', () => {
     test('two connections cannot share a name (propagates DUPLICATE_NAME)', () => {
       const a = broker.connect(() => {})
       const b = broker.connect(() => {})
-      broker.join(a, { name: 'Alice', description: '' })
+      broker.join(a, { roomId: 'main', name: 'Alice', description: '' })
       expectChatError(
-        () => broker.join(b, { name: 'Alice', description: '' }),
+        () => broker.join(b, { roomId: 'main', name: 'Alice', description: '' }),
         'DUPLICATE_NAME',
+      )
+    })
+  })
+
+  describe('multi-room isolation', () => {
+    function rec(): { received: RoomMessage[]; push: PushFn } {
+      const received: RoomMessage[] = []
+      return { received, push: m => { received.push(m) } }
+    }
+
+    test('members in distinct rooms cannot see each other via list_members', () => {
+      const aRec = rec(), bRec = rec()
+      const a = broker.connect(aRec.push)
+      const b = broker.connect(bRec.push)
+      broker.join(a, { roomId: 'auth', name: 'A', description: '' })
+      broker.join(b, { roomId: 'mod', name: 'B', description: '' })
+      expect(broker.listMembers(a).members.map(m => m.name)).toEqual(['A'])
+      expect(broker.listMembers(b).members.map(m => m.name)).toEqual(['B'])
+    })
+
+    test('a @mention does not cross rooms even with matching name', () => {
+      const aRec = rec(), bRec = rec(), cRec = rec()
+      const a = broker.connect(aRec.push)
+      const b = broker.connect(bRec.push)
+      const c = broker.connect(cRec.push)
+      broker.join(a, { roomId: 'auth', name: 'A', description: '' })
+      broker.join(b, { roomId: 'auth', name: 'B', description: '' })
+      broker.join(c, { roomId: 'mod', name: 'B', description: '' })  // same name, different room
+      broker.speak(a, { text: '@B come here' })
+      expect(bRec.received).toHaveLength(1)
+      expect(cRec.received).toHaveLength(0)
+    })
+
+    test('@everyone is scoped to the speaker’s room', () => {
+      const aRec = rec(), bRec = rec(), cRec = rec()
+      const a = broker.connect(aRec.push)
+      const b = broker.connect(bRec.push)
+      const c = broker.connect(cRec.push)
+      broker.join(a, { roomId: 'r1', name: 'A', description: '' })
+      broker.join(b, { roomId: 'r1', name: 'B', description: '' })
+      broker.join(c, { roomId: 'r2', name: 'C', description: '' })
+      broker.speak(a, { text: '@everyone hi' })
+      expect(bRec.received).toHaveLength(1)
+      expect(cRec.received).toHaveLength(0)
+    })
+
+    test('history is per-room', () => {
+      const a = broker.connect(() => {})
+      const b = broker.connect(() => {})
+      broker.join(a, { roomId: 'r1', name: 'A', description: '' })
+      broker.join(b, { roomId: 'r2', name: 'B', description: '' })
+      broker.speak(a, { text: 'in r1' })
+      broker.speak(b, { text: 'in r2' })
+      expect(broker.readHistory(a, {}).messages.map(m => m.text)).toEqual(['in r1'])
+      expect(broker.readHistory(b, {}).messages.map(m => m.text)).toEqual(['in r2'])
+    })
+
+    test('messages carry the originating room id', () => {
+      const a = broker.connect(() => {})
+      broker.join(a, { roomId: 'project-x', name: 'A', description: '' })
+      const r = broker.speak(a, { text: 'hello' })
+      expect(r.message.roomId).toBe('project-x')
+    })
+
+    test('rejects an invalid room id at join', () => {
+      const h = broker.connect(() => {})
+      expectChatError(
+        () => broker.join(h, { roomId: '1bad', name: 'A', description: '' }),
+        'INVALID_ROOM_ID',
       )
     })
   })
@@ -78,14 +147,14 @@ describe('Broker', () => {
     test('a broker configured with a token accepts matching joins', () => {
       const authed = new Broker({ room: { now }, authToken: 'secret' })
       const h = authed.connect(() => {})
-      expect(() => authed.join(h, { name: 'A', description: '', authToken: 'secret' })).not.toThrow()
+      expect(() => authed.join(h, { roomId: 'main', name: 'A', description: '', authToken: 'secret' })).not.toThrow()
     })
 
     test('rejects a join with a wrong token (BAD_AUTH)', () => {
       const authed = new Broker({ room: { now }, authToken: 'secret' })
       const h = authed.connect(() => {})
       expectChatError(
-        () => authed.join(h, { name: 'A', description: '', authToken: 'wrong' }),
+        () => authed.join(h, { roomId: 'main', name: 'A', description: '', authToken: 'wrong' }),
         'BAD_AUTH',
       )
     })
@@ -94,7 +163,7 @@ describe('Broker', () => {
       const authed = new Broker({ room: { now }, authToken: 'secret' })
       const h = authed.connect(() => {})
       expectChatError(
-        () => authed.join(h, { name: 'A', description: '' }),
+        () => authed.join(h, { roomId: 'main', name: 'A', description: '' }),
         'BAD_AUTH',
       )
     })
@@ -103,19 +172,19 @@ describe('Broker', () => {
       const open = new Broker({ room: { now } })
       const h1 = open.connect(() => {})
       const h2 = open.connect(() => {})
-      expect(() => open.join(h1, { name: 'A', description: '', authToken: 'any' })).not.toThrow()
-      expect(() => open.join(h2, { name: 'B', description: '' })).not.toThrow()
+      expect(() => open.join(h1, { roomId: 'main', name: 'A', description: '', authToken: 'any' })).not.toThrow()
+      expect(() => open.join(h2, { roomId: 'main', name: 'B', description: '' })).not.toThrow()
     })
 
     test('BAD_AUTH does not bind the connection (it can retry with the right token)', () => {
       const authed = new Broker({ room: { now }, authToken: 'secret' })
       const h = authed.connect(() => {})
       expectChatError(
-        () => authed.join(h, { name: 'A', description: '', authToken: 'wrong' }),
+        () => authed.join(h, { roomId: 'main', name: 'A', description: '', authToken: 'wrong' }),
         'BAD_AUTH',
       )
       // Should be able to retry with the right token
-      expect(() => authed.join(h, { name: 'A', description: '', authToken: 'secret' })).not.toThrow()
+      expect(() => authed.join(h, { roomId: 'main', name: 'A', description: '', authToken: 'secret' })).not.toThrow()
     })
   })
 
@@ -125,8 +194,8 @@ describe('Broker', () => {
       const bRec = recorder()
       const a = broker.connect(aRec.push)
       const b = broker.connect(bRec.push)
-      broker.join(a, { name: 'A', description: '' })
-      broker.join(b, { name: 'B', description: '' })
+      broker.join(a, { roomId: 'main', name: 'A', description: '' })
+      broker.join(b, { roomId: 'main', name: 'B', description: '' })
       broker.speak(a, { text: '@B come over' })
       expect(bRec.received).toHaveLength(1)
       expect(bRec.received[0]!.from).toBe('A')
@@ -137,9 +206,9 @@ describe('Broker', () => {
     test('@everyone pushes to all members except the speaker', () => {
       const recs = [recorder(), recorder(), recorder()]
       const handles = recs.map(r => broker.connect(r.push))
-      broker.join(handles[0]!, { name: 'A', description: '' })
-      broker.join(handles[1]!, { name: 'B', description: '' })
-      broker.join(handles[2]!, { name: 'C', description: '' })
+      broker.join(handles[0]!, { roomId: 'main', name: 'A', description: '' })
+      broker.join(handles[1]!, { roomId: 'main', name: 'B', description: '' })
+      broker.join(handles[2]!, { roomId: 'main', name: 'C', description: '' })
       broker.speak(handles[0]!, { text: '@everyone heads up' })
       expect(recs[0]!.received).toHaveLength(0)
       expect(recs[1]!.received).toHaveLength(1)
@@ -156,8 +225,8 @@ describe('Broker', () => {
       const bRec = recorder()
       const a = tight.connect(() => {})
       const b = tight.connect(bRec.push)
-      tight.join(a, { name: 'A', description: '' })
-      tight.join(b, { name: 'B', description: '' })
+      tight.join(a, { roomId: 'main', name: 'A', description: '' })
+      tight.join(b, { roomId: 'main', name: 'B', description: '' })
       tight.speak(a, { text: '@B one' })
       const r2 = tight.speak(a, { text: '@B two' })
       expect(r2.throttled).toEqual(['B'])
@@ -168,7 +237,7 @@ describe('Broker', () => {
     test('does not push to unknown @-targets', () => {
       const aRec = recorder()
       const a = broker.connect(aRec.push)
-      broker.join(a, { name: 'A', description: '' })
+      broker.join(a, { roomId: 'main', name: 'A', description: '' })
       const r = broker.speak(a, { text: '@Ghost where are you' })
       expect(r.delivered).toEqual([])
       expect(aRec.received).toHaveLength(0)
@@ -184,8 +253,8 @@ describe('Broker', () => {
     test('explicit leave removes the member', () => {
       const a = broker.connect(() => {})
       const b = broker.connect(() => {})
-      broker.join(a, { name: 'A', description: '' })
-      broker.join(b, { name: 'B', description: '' })
+      broker.join(a, { roomId: 'main', name: 'A', description: '' })
+      broker.join(b, { roomId: 'main', name: 'B', description: '' })
       broker.leave(a)
       expect(broker.listMembers(b).members.map(m => m.name)).toEqual(['B'])
     })
@@ -198,26 +267,26 @@ describe('Broker', () => {
     test('disconnect implicitly leaves the joined member', () => {
       const a = broker.connect(() => {})
       const b = broker.connect(() => {})
-      broker.join(a, { name: 'A', description: '' })
-      broker.join(b, { name: 'B', description: '' })
+      broker.join(a, { roomId: 'main', name: 'A', description: '' })
+      broker.join(b, { roomId: 'main', name: 'B', description: '' })
       broker.disconnect(a)
       expect(broker.listMembers(b).members.map(m => m.name)).toEqual(['B'])
     })
 
     test('after leave, the same connection can join under a new name', () => {
       const h = broker.connect(() => {})
-      broker.join(h, { name: 'Alice', description: 'first' })
+      broker.join(h, { roomId: 'main', name: 'Alice', description: 'first' })
       broker.leave(h)
-      const r = broker.join(h, { name: 'Bob', description: 'second' })
+      const r = broker.join(h, { roomId: 'main', name: 'Bob', description: 'second' })
       expect(r.joinedAt).toBe(clock)
     })
 
     test('disconnect frees the member name for someone else', () => {
       const a = broker.connect(() => {})
       const b = broker.connect(() => {})
-      broker.join(a, { name: 'Alice', description: '' })
+      broker.join(a, { roomId: 'main', name: 'Alice', description: '' })
       broker.disconnect(a)
-      expect(() => broker.join(b, { name: 'Alice', description: '' })).not.toThrow()
+      expect(() => broker.join(b, { roomId: 'main', name: 'Alice', description: '' })).not.toThrow()
     })
   })
 
@@ -231,8 +300,8 @@ describe('Broker', () => {
     test('history reflects past speak calls', () => {
       const a = broker.connect(() => {})
       const b = broker.connect(() => {})
-      broker.join(a, { name: 'A', description: '' })
-      broker.join(b, { name: 'B', description: '' })
+      broker.join(a, { roomId: 'main', name: 'A', description: '' })
+      broker.join(b, { roomId: 'main', name: 'B', description: '' })
       broker.speak(a, { text: 'one' })
       broker.speak(b, { text: 'two' })
       expect(broker.readHistory(a, {}).messages.map(m => m.text)).toEqual(['one', 'two'])
@@ -241,8 +310,8 @@ describe('Broker', () => {
     test('listMembers reflects the current roster', () => {
       const a = broker.connect(() => {})
       const b = broker.connect(() => {})
-      broker.join(a, { name: 'A', description: 'one' })
-      broker.join(b, { name: 'B', description: 'two' })
+      broker.join(a, { roomId: 'main', name: 'A', description: 'one' })
+      broker.join(b, { roomId: 'main', name: 'B', description: 'two' })
       const names = broker.listMembers(a).members.map(m => m.name)
       expect(new Set(names)).toEqual(new Set(['A', 'B']))
     })

@@ -79,6 +79,7 @@ export const RequestEnvelopeSchema = z.strictObject({
 export type RequestEnvelope = z.infer<typeof RequestEnvelopeSchema>
 
 export const JoinParamsSchema = z.strictObject({
+  roomId: z.string(),
   name: z.string(),
   description: z.string(),
   /** Optional per-user auth token. The broker only enforces it if configured with one. */

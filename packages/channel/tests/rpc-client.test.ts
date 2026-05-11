@@ -40,7 +40,7 @@ describe('RpcClient', () => {
   })
 
   test('successful call resolves with the result', async () => {
-    const r = await rpc.call(METHOD.Join, { name: 'A', description: '' })
+    const r = await rpc.call(METHOD.Join, { roomId: 'main', name: 'A', description: '' })
     expect(r).toEqual({ joinedAt: 1_700_000_000_000 })
   })
 
@@ -56,7 +56,7 @@ describe('RpcClient', () => {
   })
 
   test('server-pushed notification fires the handler', async () => {
-    await rpc.call(METHOD.Join, { name: 'A', description: '' })
+    await rpc.call(METHOD.Join, { roomId: 'main', name: 'A', description: '' })
 
     const conn2 = await connectToBroker({
       stateDir: dir,
@@ -65,7 +65,7 @@ describe('RpcClient', () => {
     })
     aux.push(() => conn2.ws.close())
     const rpc2 = new RpcClient({ ws: conn2.ws, onNotification: () => {} })
-    await rpc2.call(METHOD.Join, { name: 'B', description: '' })
+    await rpc2.call(METHOD.Join, { roomId: 'main', name: 'B', description: '' })
     await rpc2.call(METHOD.Speak, { text: '@A heads up' })
 
     await new Promise(r => setTimeout(r, 50))
@@ -77,7 +77,7 @@ describe('RpcClient', () => {
   })
 
   test('parallel calls resolve independently with the correct response paired to each id', async () => {
-    await rpc.call(METHOD.Join, { name: 'A', description: '' })
+    await rpc.call(METHOD.Join, { roomId: 'main', name: 'A', description: '' })
     const [members, history] = await Promise.all([
       rpc.call(METHOD.ListMembers, {}),
       rpc.call(METHOD.ReadHistory, {}),

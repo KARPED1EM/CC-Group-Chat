@@ -58,7 +58,7 @@ describe('startWsServer', () => {
       jsonrpc: JSON_RPC_VERSION,
       id: 1,
       method: METHOD.Join,
-      params: { name: 'A', description: 'tester' },
+      params: { roomId: 'main', name: 'A', description: 'tester' },
     }))
     const reply = await next(ws)
     expect(reply.id).toBe(1)
@@ -70,10 +70,10 @@ describe('startWsServer', () => {
     const a = await open(server.url)
     const b = await open(server.url)
 
-    a.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'join', params: { name: 'A', description: '' } }))
+    a.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'join', params: { roomId: 'main', name: 'A', description: '' } }))
     await next(a)
 
-    b.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'join', params: { name: 'B', description: '' } }))
+    b.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'join', params: { roomId: 'main', name: 'B', description: '' } }))
     await next(b)
 
     const pushed = next(b)
@@ -92,11 +92,11 @@ describe('startWsServer', () => {
 
   test('disconnect implicitly leaves', async () => {
     const a = await open(server.url)
-    a.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'join', params: { name: 'A', description: '' } }))
+    a.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'join', params: { roomId: 'main', name: 'A', description: '' } }))
     await next(a)
 
     const b = await open(server.url)
-    b.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'join', params: { name: 'B', description: '' } }))
+    b.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'join', params: { roomId: 'main', name: 'B', description: '' } }))
     await next(b)
 
     a.close()
@@ -104,7 +104,7 @@ describe('startWsServer', () => {
 
     b.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'list_members', params: {} }))
     const list = await next(b)
-    expect((list.result as { members: Array<{ name: string }> }).members.map(m => m.name)).toEqual(['B'])
+    expect((list.result as { members: Array<{ roomId: 'main', name: string }> }).members.map(m => m.name)).toEqual(['B'])
 
     b.close()
   })

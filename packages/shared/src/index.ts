@@ -33,6 +33,7 @@ export {
   STATE_FILE_VERSION,
   getDefaultStateDir,
   getBrokerPort,
+  getDefaultRoomId,
   readStateFile,
   writeStateFile,
   removeStateFile,

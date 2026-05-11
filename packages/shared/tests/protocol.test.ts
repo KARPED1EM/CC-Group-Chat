@@ -49,11 +49,11 @@ describe('RequestEnvelopeSchema', () => {
 
 describe('JoinParamsSchema', () => {
   test('accepts valid params', () => {
-    expect(JoinParamsSchema.safeParse({ name: 'A', description: 'x' }).success).toBe(true)
+    expect(JoinParamsSchema.safeParse({ roomId: 'main', name: 'A', description: 'x' }).success).toBe(true)
   })
 
   test('rejects missing description', () => {
-    expect(JoinParamsSchema.safeParse({ name: 'A' }).success).toBe(false)
+    expect(JoinParamsSchema.safeParse({ roomId: 'main', name: 'A' }).success).toBe(false)
   })
 
   test('rejects non-string fields', () => {
@@ -61,7 +61,7 @@ describe('JoinParamsSchema', () => {
   })
 
   test('rejects extra keys', () => {
-    expect(JoinParamsSchema.safeParse({ name: 'A', description: '', extra: 1 }).success).toBe(false)
+    expect(JoinParamsSchema.safeParse({ roomId: 'main', name: 'A', description: '', extra: 1 }).success).toBe(false)
   })
 })
 

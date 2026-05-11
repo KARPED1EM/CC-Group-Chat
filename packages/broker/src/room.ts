@@ -7,8 +7,11 @@ const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
 const RESERVED_NAMES: ReadonlySet<string> = new Set([EVERYONE])
 const MAX_DESCRIPTION_LENGTH = 280
 const DEFAULT_HARD_CAP = 200
+const DEFAULT_ROOM_ID = 'default'
 
 export interface RoomOptions {
+  /** Stable identifier stamped onto every message originating in this room. */
+  readonly id?: string
   readonly now?: () => number
   readonly hardCap?: number
   readonly stormGuard?: StormGuard
@@ -25,6 +28,7 @@ interface ResolvedTargets {
 }
 
 export class Room {
+  readonly #id: string
   readonly #now: () => number
   readonly #hardCap: number
   readonly #stormGuard: StormGuard
@@ -33,9 +37,14 @@ export class Room {
   #nextId = 1
 
   constructor(opts: RoomOptions = {}) {
+    this.#id = opts.id ?? DEFAULT_ROOM_ID
     this.#now = opts.now ?? Date.now
     this.#hardCap = opts.hardCap ?? DEFAULT_HARD_CAP
     this.#stormGuard = opts.stormGuard ?? new StormGuard({ now: this.#now })
+  }
+
+  get id(): string {
+    return this.#id
   }
 
   join(name: string, description: string): Member {
@@ -93,6 +102,7 @@ export class Room {
 
     const message: RoomMessage = {
       id: this.#nextId++,
+      roomId: this.#id,
       from,
       text,
       at: this.#now(),
@@ -104,6 +114,11 @@ export class Room {
 
   members(): readonly Member[] {
     return [...this.#members.values()]
+  }
+
+  /** True when no members are currently joined. */
+  isEmpty(): boolean {
+    return this.#members.size === 0
   }
 
   history(query: HistoryQuery = {}): readonly RoomMessage[] {
