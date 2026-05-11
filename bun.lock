@@ -5,8 +5,9 @@
     "": {
       "name": "cc-group-chat",
       "devDependencies": {
-        "@types/bun": "latest",
-        "typescript": "^5.7.3",
+        "@types/bun": "1.3.13",
+        "bun-types": "1.3.13",
+        "typescript": "5.9.3",
       },
     },
     "packages/broker": {
@@ -20,12 +21,19 @@
       "name": "@cc-group-chat/channel",
       "version": "0.0.0",
       "dependencies": {
+        "@cc-group-chat/shared": "workspace:*",
         "@modelcontextprotocol/sdk": "1.29.0",
+      },
+      "devDependencies": {
+        "@cc-group-chat/broker": "workspace:*",
       },
     },
     "packages/shared": {
       "name": "@cc-group-chat/shared",
       "version": "0.0.0",
+      "dependencies": {
+        "zod": "4.4.3",
+      },
     },
   },
   "packages": {

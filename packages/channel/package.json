@@ -4,6 +4,10 @@
   "version": "0.0.0",
   "type": "module",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0"
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@cc-group-chat/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@cc-group-chat/broker": "workspace:*"
   }
 }

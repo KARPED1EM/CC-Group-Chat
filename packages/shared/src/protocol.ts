@@ -7,6 +7,7 @@
 // until it sends a `join` request; thereafter every subsequent request is
 // authenticated as that member.
 
+import { z } from 'zod'
 import type { Member, RoomMessage, SpeakResult } from './types.ts'
 
 // ===== JSON-RPC 2.0 envelopes =====
@@ -60,36 +61,59 @@ export const METHOD = {
 
 export type MethodName = (typeof METHOD)[keyof typeof METHOD]
 
-// ===== Request params and results =====
+// ===== Wire-validation schemas =====
 
-export interface JoinParams {
-  readonly name: string
-  readonly description: string
-}
+const IdSchema = z.union([z.number(), z.string()])
+
+/**
+ * Outer envelope for any inbound JSON-RPC request. `method` is left as a
+ * loose `z.string()` so the dispatcher can emit `MethodNotFound` for
+ * unknown methods rather than `InvalidRequest`.
+ */
+export const RequestEnvelopeSchema = z.strictObject({
+  jsonrpc: z.literal(JSON_RPC_VERSION),
+  id: IdSchema,
+  method: z.string(),
+  params: z.unknown(),
+})
+export type RequestEnvelope = z.infer<typeof RequestEnvelopeSchema>
+
+export const JoinParamsSchema = z.strictObject({
+  name: z.string(),
+  description: z.string(),
+})
+export type JoinParams = z.infer<typeof JoinParamsSchema>
+
+export const LeaveParamsSchema = z.strictObject({})
+export type LeaveParams = z.infer<typeof LeaveParamsSchema>
+
+export const SpeakParamsSchema = z.strictObject({
+  text: z.string(),
+})
+export type SpeakParams = z.infer<typeof SpeakParamsSchema>
+
+export const ReadHistoryParamsSchema = z.strictObject({
+  sinceId: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().optional(),
+})
+export type ReadHistoryParams = z.infer<typeof ReadHistoryParamsSchema>
+
+export const ListMembersParamsSchema = z.strictObject({})
+export type ListMembersParams = z.infer<typeof ListMembersParamsSchema>
+
+// ===== Result types (outbound from broker — no runtime validation) =====
 
 export interface JoinResult {
   readonly joinedAt: number
 }
 
-export type LeaveParams = Record<string, never>
 export type LeaveResult = Record<string, never>
 
-export interface SpeakParams {
-  readonly text: string
-}
-
 export type SpeakRpcResult = SpeakResult
-
-export interface ReadHistoryParams {
-  readonly sinceId?: number
-  readonly limit?: number
-}
 
 export interface ReadHistoryResult {
   readonly messages: readonly RoomMessage[]
 }
-
-export type ListMembersParams = Record<string, never>
 
 export interface ListMembersResult {
   readonly members: readonly Member[]

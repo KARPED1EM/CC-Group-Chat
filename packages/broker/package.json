@@ -8,6 +8,7 @@
     "@cc-group-chat/shared": "workspace:*"
   },
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "daemon": "bun ./src/daemon.ts"
   }
 }

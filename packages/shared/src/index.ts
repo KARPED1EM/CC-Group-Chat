@@ -3,6 +3,12 @@ export {
   JSON_RPC_VERSION,
   METHOD,
   RPC_ERROR_CODES,
+  RequestEnvelopeSchema,
+  JoinParamsSchema,
+  LeaveParamsSchema,
+  SpeakParamsSchema,
+  ReadHistoryParamsSchema,
+  ListMembersParamsSchema,
   type MethodName,
   type JsonRpcRequest,
   type JsonRpcSuccess,
@@ -10,6 +16,7 @@ export {
   type JsonRpcErrorBody,
   type JsonRpcResponse,
   type JsonRpcNotification,
+  type RequestEnvelope,
   type JoinParams,
   type JoinResult,
   type LeaveParams,
@@ -22,3 +29,11 @@ export {
   type ListMembersResult,
   type RoomEventParams,
 } from './protocol.ts'
+export {
+  STATE_FILE_VERSION,
+  getDefaultStateDir,
+  readStateFile,
+  writeStateFile,
+  removeStateFile,
+  type BrokerStateFile,
+} from './daemon.ts'
