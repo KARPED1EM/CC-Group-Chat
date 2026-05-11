@@ -1,0 +1,13 @@
+{
+  "name": "@cc-group-chat/broker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@cc-group-chat/shared": "workspace:*"
+  },
+  "scripts": {
+    "test": "bun test"
+  }
+}

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+*.log
+.env
+.env.local
+.DS_Store
+Thumbs.db
+
+# Claude Code per-user local overrides
+.claude/settings.local.json
+.claude/*.local.*
