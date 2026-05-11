@@ -1,5 +1,8 @@
 // Domain types shared by the broker daemon and the per-session channel server.
 
+/** Whether a member has been active recently. */
+export type Engagement = 'idle' | 'engaged'
+
 /** A session that has joined the room. */
 export interface Member {
   /** Unique identifier within the room. Matches the `@`-mention syntax. */
@@ -8,6 +11,13 @@ export interface Member {
   readonly description: string
   /** Unix milliseconds at which this member joined. */
   readonly joinedAt: number
+  /**
+   * Computed from the time since the member last invoked any group-chat tool.
+   * `engaged` while activity happened within the engagement window (60s);
+   * `idle` once it stops. Lets observers distinguish "agent is processing"
+   * from "agent has gone quiet without leaving".
+   */
+  readonly engagement: Engagement
 }
 
 /** A message persisted in the room's history. */

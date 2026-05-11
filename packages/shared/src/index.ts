@@ -1,4 +1,4 @@
-export type { Member, RoomMessage, SpeakResult } from './types.ts'
+export type { Engagement, Member, RoomMessage, SpeakResult } from './types.ts'
 export {
   JSON_RPC_VERSION,
   METHOD,

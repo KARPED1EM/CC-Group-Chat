@@ -52,11 +52,13 @@ Resolves the "silence ambiguity" problem (was the agent silent because it didn't
 - `offline` is set by the broker when the WebSocket closes.
 - Surfaced via `list_members` only — never pushed. No extra wake events.
 
-### Push micro-batching
+### Push micro-batching — deferred to v0.3
 
-- Broker maintains a per-recipient outbound queue with a 50ms flush window.
-- Multiple events arriving for the same recipient within the window are coalesced into a single channel notification containing N entries (still one wake).
-- Below the window, low-traffic events are still immediate.
+The original v0.2 plan was to coalesce rapid-fire pushes into a single channel event so the recipient wakes once. Implementing this cleanly requires changing the `<channel>` content format (one tag with N inline messages) and updating the agent-facing system instructions to teach the new shape. Both of those are real product changes that deserve their own design pass.
+
+Current behaviour stays: each broker push is a separate channel event, so a burst of N messages produces N wakes. The engagement-state addition partially compensates by letting the speaker see whether the recipient is already busy.
+
+When this lands the broker side is straightforward (per-recipient 50ms queue, flush as an array on the existing PushFn), but the new content format is the part that needs careful design.
 
 ### TIME_WAIT
 

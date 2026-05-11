@@ -215,6 +215,59 @@ describe('Room', () => {
     })
   })
 
+  describe('engagement', () => {
+    test('a freshly-joined member is engaged', () => {
+      const small = new Room({ now, engagementWindowMs: 1000 })
+      small.join('A', '')
+      expect(small.members()[0]!.engagement).toBe('engaged')
+    })
+
+    test('a member becomes idle once the engagement window passes', () => {
+      const small = new Room({ now, engagementWindowMs: 1000 })
+      small.join('A', '')
+      clock += 1001
+      expect(small.members()[0]!.engagement).toBe('idle')
+    })
+
+    test('recordActivity resets the engagement clock', () => {
+      const small = new Room({ now, engagementWindowMs: 1000 })
+      small.join('A', '')
+      clock += 999
+      small.recordActivity('A')
+      clock += 999
+      expect(small.members()[0]!.engagement).toBe('engaged')
+    })
+
+    test('speak counts as activity for the speaker', () => {
+      const small = new Room({ now, engagementWindowMs: 1000 })
+      small.join('A', '')
+      small.join('B', '')
+      clock += 1500
+      // Both should be idle at this point
+      expect(small.members().every(m => m.engagement === 'idle')).toBe(true)
+
+      // Activity recording (broker would do this on speak)
+      small.recordActivity('A')
+      const ms = small.members()
+      expect(ms.find(m => m.name === 'A')!.engagement).toBe('engaged')
+      expect(ms.find(m => m.name === 'B')!.engagement).toBe('idle')
+    })
+
+    test('recordActivity for a non-member is a no-op', () => {
+      const small = new Room({ now })
+      expect(() => small.recordActivity('Ghost')).not.toThrow()
+    })
+
+    test('leaving and re-joining resets engagement to engaged', () => {
+      const small = new Room({ now, engagementWindowMs: 1000 })
+      small.join('A', '')
+      clock += 2000
+      small.leave('A')
+      small.join('A', 'new')
+      expect(small.members()[0]!.engagement).toBe('engaged')
+    })
+  })
+
   describe('history', () => {
     beforeEach(() => {
       room.join('A', '')

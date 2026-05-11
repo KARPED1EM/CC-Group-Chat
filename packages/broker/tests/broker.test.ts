@@ -74,6 +74,47 @@ describe('Broker', () => {
     })
   })
 
+  describe('engagement tracking', () => {
+    test('list_members reports engaged immediately after join', () => {
+      const a = broker.connect(() => {})
+      broker.join(a, { roomId: 'main', name: 'A', description: '' })
+      expect(broker.listMembers(a).members[0]!.engagement).toBe('engaged')
+    })
+
+    test('a peer becomes idle after the engagement window with no activity', () => {
+      const tight = new Broker({ room: { now, engagementWindowMs: 1_000 } })
+      const a = tight.connect(() => {})
+      const b = tight.connect(() => {})
+      tight.join(a, { roomId: 'main', name: 'A', description: '' })
+      tight.join(b, { roomId: 'main', name: 'B', description: '' })
+      clock += 1_500
+      tight.listMembers(a)  // a still active by calling list_members
+      const members = tight.listMembers(a).members
+      const a_state = members.find(m => m.name === 'A')!.engagement
+      const b_state = members.find(m => m.name === 'B')!.engagement
+      expect(a_state).toBe('engaged')
+      expect(b_state).toBe('idle')
+    })
+
+    test('speak counts as activity for the speaker', () => {
+      const tight = new Broker({ room: { now, engagementWindowMs: 1_000 } })
+      const a = tight.connect(() => {})
+      tight.join(a, { roomId: 'main', name: 'A', description: '' })
+      clock += 1_500
+      tight.speak(a, { text: 'hi' })
+      expect(tight.listMembers(a).members[0]!.engagement).toBe('engaged')
+    })
+
+    test('read_history counts as activity', () => {
+      const tight = new Broker({ room: { now, engagementWindowMs: 1_000 } })
+      const a = tight.connect(() => {})
+      tight.join(a, { roomId: 'main', name: 'A', description: '' })
+      clock += 1_500
+      tight.readHistory(a, {})
+      expect(tight.listMembers(a).members[0]!.engagement).toBe('engaged')
+    })
+  })
+
   describe('multi-room isolation', () => {
     function rec(): { received: RoomMessage[]; push: PushFn } {
       const received: RoomMessage[] = []

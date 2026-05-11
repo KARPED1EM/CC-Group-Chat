@@ -1,4 +1,4 @@
-import type { Member, RoomMessage, SpeakResult } from '@cc-group-chat/shared'
+import type { Engagement, Member, RoomMessage, SpeakResult } from '@cc-group-chat/shared'
 import { ChatError } from './errors.ts'
 import { EVERYONE, parseMentions } from './mentions.ts'
 import { StormGuard } from './storm-guard.ts'
@@ -7,6 +7,7 @@ const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
 const RESERVED_NAMES: ReadonlySet<string> = new Set([EVERYONE])
 const MAX_DESCRIPTION_LENGTH = 280
 const DEFAULT_HARD_CAP = 200
+const DEFAULT_ENGAGEMENT_WINDOW_MS = 60_000
 const DEFAULT_ROOM_ID = 'default'
 
 export interface RoomOptions {
@@ -15,11 +16,22 @@ export interface RoomOptions {
   readonly now?: () => number
   readonly hardCap?: number
   readonly stormGuard?: StormGuard
+  /**
+   * Time since a member's last activity before they are reported as `idle`.
+   * Defaults to 60 seconds.
+   */
+  readonly engagementWindowMs?: number
 }
 
 export interface HistoryQuery {
   readonly sinceId?: number
   readonly limit?: number
+}
+
+interface MemberData {
+  readonly name: string
+  readonly description: string
+  readonly joinedAt: number
 }
 
 interface ResolvedTargets {
@@ -32,7 +44,9 @@ export class Room {
   readonly #now: () => number
   readonly #hardCap: number
   readonly #stormGuard: StormGuard
-  readonly #members = new Map<string, Member>()
+  readonly #engagementWindowMs: number
+  readonly #members = new Map<string, MemberData>()
+  readonly #lastActivityAt = new Map<string, number>()
   readonly #history: RoomMessage[] = []
   #nextId = 1
 
@@ -41,6 +55,7 @@ export class Room {
     this.#now = opts.now ?? Date.now
     this.#hardCap = opts.hardCap ?? DEFAULT_HARD_CAP
     this.#stormGuard = opts.stormGuard ?? new StormGuard({ now: this.#now })
+    this.#engagementWindowMs = opts.engagementWindowMs ?? DEFAULT_ENGAGEMENT_WINDOW_MS
   }
 
   get id(): string {
@@ -66,14 +81,28 @@ export class Room {
         `Description must be at most ${MAX_DESCRIPTION_LENGTH} characters (got ${description.length})`,
       )
     }
-    const member: Member = { name, description, joinedAt: this.#now() }
-    this.#members.set(name, member)
-    return member
+    const joinedAt = this.#now()
+    const data: MemberData = { name, description, joinedAt }
+    this.#members.set(name, data)
+    this.#lastActivityAt.set(name, joinedAt)
+    return { ...data, engagement: 'engaged' }
   }
 
   leave(name: string): void {
     this.#members.delete(name)
+    this.#lastActivityAt.delete(name)
     this.#stormGuard.forget(name)
+  }
+
+  /**
+   * Refresh a member's last-activity stamp. Called by the Broker on every
+   * incoming tool call so that the computed engagement reflects what the
+   * member is doing.
+   */
+  recordActivity(name: string): void {
+    if (this.#members.has(name)) {
+      this.#lastActivityAt.set(name, this.#now())
+    }
   }
 
   speak(from: string, text: string): SpeakResult {
@@ -113,7 +142,15 @@ export class Room {
   }
 
   members(): readonly Member[] {
-    return [...this.#members.values()]
+    const now = this.#now()
+    const result: Member[] = []
+    for (const data of this.#members.values()) {
+      const lastActivity = this.#lastActivityAt.get(data.name) ?? data.joinedAt
+      const engagement: Engagement =
+        now - lastActivity < this.#engagementWindowMs ? 'engaged' : 'idle'
+      result.push({ ...data, engagement })
+    }
+    return result
   }
 
   /** True when no members are currently joined. */

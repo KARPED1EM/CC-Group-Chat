@@ -135,6 +135,7 @@ export class Broker {
   speak(handle: ConnectionHandle, params: { readonly text: string }): SpeakResult {
     const { roomId, memberName } = this.#requireJoined(handle)
     const room = this.#requireRoom(roomId)
+    room.recordActivity(memberName)
     const result = room.speak(memberName, params.text)
     for (const target of result.delivered) this.#push(roomId, target, result.message)
     return result
@@ -144,14 +145,16 @@ export class Broker {
     handle: ConnectionHandle,
     params: { readonly sinceId?: number; readonly limit?: number },
   ): { messages: readonly RoomMessage[] } {
-    const { roomId } = this.#requireJoined(handle)
+    const { roomId, memberName } = this.#requireJoined(handle)
     const room = this.#requireRoom(roomId)
+    room.recordActivity(memberName)
     return { messages: room.history(params) }
   }
 
   listMembers(handle: ConnectionHandle): { members: readonly Member[] } {
-    const { roomId } = this.#requireJoined(handle)
+    const { roomId, memberName } = this.#requireJoined(handle)
     const room = this.#requireRoom(roomId)
+    room.recordActivity(memberName)
     return { members: room.members() }
   }
 
