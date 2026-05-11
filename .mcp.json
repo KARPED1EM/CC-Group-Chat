@@ -2,7 +2,7 @@
   "mcpServers": {
     "cc-group-chat": {
       "command": "bun",
-      "args": ["./bin/channel.js"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/channel.js"]
     }
   }
 }
