@@ -16,43 +16,60 @@ describe('StormGuard', () => {
     })
   })
 
-  test('allows deliveries up to the budget', () => {
-    for (let i = 0; i < 3; i++) {
-      expect(guard.canDeliverTo('Bob')).toBe(true)
-      guard.recordDelivery('Bob')
-    }
+  describe('tryDeliverTo', () => {
+    test('allows up to the budget then denies', () => {
+      for (let i = 0; i < 3; i++) expect(guard.tryDeliverTo('Bob')).toBe(true)
+      expect(guard.tryDeliverTo('Bob')).toBe(false)
+    })
+
+    test('recovers as the window slides past the oldest delivery', () => {
+      for (let i = 0; i < 3; i++) guard.tryDeliverTo('Bob')
+      expect(guard.tryDeliverTo('Bob')).toBe(false)
+      clock += 60_001
+      expect(guard.tryDeliverTo('Bob')).toBe(true)
+    })
+
+    test('per-member budgets are independent', () => {
+      for (let i = 0; i < 3; i++) guard.tryDeliverTo('Bob')
+      expect(guard.tryDeliverTo('Bob')).toBe(false)
+      expect(guard.tryDeliverTo('Alice')).toBe(true)
+    })
+
+    test('a denied call does not consume budget', () => {
+      for (let i = 0; i < 3; i++) guard.tryDeliverTo('Bob')
+      expect(guard.tryDeliverTo('Bob')).toBe(false)
+      // sliding the window past one entry should yield exactly one new slot
+      clock += 60_001
+      expect(guard.tryDeliverTo('Bob')).toBe(true)
+      expect(guard.tryDeliverTo('Bob')).toBe(true)
+      expect(guard.tryDeliverTo('Bob')).toBe(true)
+      expect(guard.tryDeliverTo('Bob')).toBe(false)
+    })
   })
 
-  test('blocks deliveries that exceed the budget within the window', () => {
-    for (let i = 0; i < 3; i++) guard.recordDelivery('Bob')
-    expect(guard.canDeliverTo('Bob')).toBe(false)
+  describe('forget', () => {
+    test('clears a member’s recorded wakes', () => {
+      for (let i = 0; i < 3; i++) guard.tryDeliverTo('Bob')
+      expect(guard.tryDeliverTo('Bob')).toBe(false)
+      guard.forget('Bob')
+      expect(guard.tryDeliverTo('Bob')).toBe(true)
+    })
   })
 
-  test('budget recovers as the window slides past the oldest delivery', () => {
-    for (let i = 0; i < 3; i++) guard.recordDelivery('Bob')
-    expect(guard.canDeliverTo('Bob')).toBe(false)
-    clock += 60_001
-    expect(guard.canDeliverTo('Bob')).toBe(true)
-  })
+  describe('tryTriggerEveryone', () => {
+    test('honours the cooldown', () => {
+      expect(guard.tryTriggerEveryone()).toBe(true)
+      expect(guard.tryTriggerEveryone()).toBe(false)
+      clock += 60_001
+      expect(guard.tryTriggerEveryone()).toBe(true)
+    })
 
-  test('per-member budgets are independent', () => {
-    for (let i = 0; i < 3; i++) guard.recordDelivery('Bob')
-    expect(guard.canDeliverTo('Bob')).toBe(false)
-    expect(guard.canDeliverTo('Alice')).toBe(true)
-  })
-
-  test('forget clears a member’s recorded wakes', () => {
-    for (let i = 0; i < 3; i++) guard.recordDelivery('Bob')
-    expect(guard.canDeliverTo('Bob')).toBe(false)
-    guard.forget('Bob')
-    expect(guard.canDeliverTo('Bob')).toBe(true)
-  })
-
-  test('@everyone trigger honours the cooldown', () => {
-    expect(guard.canTriggerEveryone()).toBe(true)
-    guard.recordEveryoneTrigger()
-    expect(guard.canTriggerEveryone()).toBe(false)
-    clock += 60_001
-    expect(guard.canTriggerEveryone()).toBe(true)
+    test('a denied call does not advance the cooldown', () => {
+      expect(guard.tryTriggerEveryone()).toBe(true)
+      clock += 30_000
+      expect(guard.tryTriggerEveryone()).toBe(false)
+      clock += 30_001
+      expect(guard.tryTriggerEveryone()).toBe(true)
+    })
   })
 })

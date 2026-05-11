@@ -32,22 +32,30 @@ export class StormGuard {
     this.#everyoneIntervalMs = opts.everyoneIntervalMs ?? DEFAULTS.everyoneIntervalMs
   }
 
-  canDeliverTo(name: string): boolean {
-    return this.#prunedWakes(name).length < this.#budget
+  /**
+   * Attempt to consume one wake for `name`.
+   * Returns `true` if it fit within the per-member budget (and is now recorded);
+   * `false` if the budget is exhausted for the current window (no state change).
+   */
+  tryDeliverTo(name: string): boolean {
+    const wakes = this.#prunedWakes(name)
+    if (wakes.length >= this.#budget) return false
+    wakes.push(this.#now())
+    return true
   }
 
-  recordDelivery(name: string): void {
-    this.#prunedWakes(name).push(this.#now())
-  }
-
-  canTriggerEveryone(): boolean {
-    return this.#now() - this.#lastEveryoneTrigger >= this.#everyoneIntervalMs
-  }
-
-  recordEveryoneTrigger(): void {
+  /**
+   * Attempt to consume one `@everyone` broadcast.
+   * Returns `true` if the cooldown has elapsed (and is now reset);
+   * `false` if a previous broadcast is still within the cooldown window.
+   */
+  tryTriggerEveryone(): boolean {
+    if (this.#now() - this.#lastEveryoneTrigger < this.#everyoneIntervalMs) return false
     this.#lastEveryoneTrigger = this.#now()
+    return true
   }
 
+  /** Drop all recorded wakes for a member. Called when they leave. */
   forget(name: string): void {
     this.#wakes.delete(name)
   }

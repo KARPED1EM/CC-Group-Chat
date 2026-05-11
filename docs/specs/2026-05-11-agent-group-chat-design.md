@@ -73,9 +73,9 @@ Single process per host. Listens on a local IPC endpoint. Responsibilities:
 - Message log per room: append-only, monotonically numbered.
 - `@` parsing and routing: messages with `@target` push to that target's channel server; messages without push to no one (they only land in history).
 - Storm guards:
-  - Per-member wake budget: ≤10 wakes per 5 minutes; excess queued.
-  - Per-room hard cap: ≤200 messages; further sends rejected with a back-pressure error.
-  - `@everyone` rate limit: ≤1 trigger per 5 minutes.
+  - Per-member wake budget: ≤10 wakes per 5 minutes. Excess wakes are reported back to the speaker in `SpeakResult.throttled` so the agent knows the target did not receive the message; nothing is queued.
+  - Per-room hard cap: ≤200 messages; further sends throw `ROOM_FULL`.
+  - `@everyone` rate limit: ≤1 trigger per 5 minutes. A throttled broadcast is reported in `SpeakResult.everyoneThrottled`; per-name mentions in the same message still deliver as usual.
 - Persistence: append each message to `~/.cc-group-chat/rooms/<room-id>.jsonl`. Reload on restart.
 
 The broker has no view of room semantics beyond routing — it does not detect consensus, terminate conversations, or judge content.

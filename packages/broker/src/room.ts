@@ -5,6 +5,7 @@ import { StormGuard } from './storm-guard.ts'
 
 const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
 const RESERVED_NAMES: ReadonlySet<string> = new Set([EVERYONE])
+const MAX_DESCRIPTION_LENGTH = 280
 const DEFAULT_HARD_CAP = 200
 
 export interface RoomOptions {
@@ -16,6 +17,11 @@ export interface RoomOptions {
 export interface HistoryQuery {
   readonly sinceId?: number
   readonly limit?: number
+}
+
+interface ResolvedTargets {
+  readonly targets: readonly string[]
+  readonly everyoneThrottled: boolean
 }
 
 export class Room {
@@ -36,7 +42,7 @@ export class Room {
     if (!NAME_PATTERN.test(name)) {
       throw new ChatError(
         'INVALID_NAME',
-        `Name '${name}' must start with a letter and contain only letters, digits, '-' or '_'`,
+        `Name '${name}' must start with a letter and contain only letters, digits, '-' or '_' (max 64 chars)`,
       )
     }
     if (RESERVED_NAMES.has(name)) {
@@ -44,6 +50,12 @@ export class Room {
     }
     if (this.#members.has(name)) {
       throw new ChatError('DUPLICATE_NAME', `Name '${name}' is already in the room`)
+    }
+    if (description.length > MAX_DESCRIPTION_LENGTH) {
+      throw new ChatError(
+        'INVALID_DESCRIPTION',
+        `Description must be at most ${MAX_DESCRIPTION_LENGTH} characters (got ${description.length})`,
+      )
     }
     const member: Member = { name, description, joinedAt: this.#now() }
     this.#members.set(name, member)
@@ -67,13 +79,12 @@ export class Room {
     }
 
     const mentions = parseMentions(text)
-    const targets = this.#resolveTargets(from, mentions)
+    const { targets, everyoneThrottled } = this.#resolveTargets(from, mentions)
 
     const delivered: string[] = []
     const throttled: string[] = []
     for (const target of targets) {
-      if (this.#stormGuard.canDeliverTo(target)) {
-        this.#stormGuard.recordDelivery(target)
+      if (this.#stormGuard.tryDeliverTo(target)) {
         delivered.push(target)
       } else {
         throttled.push(target)
@@ -88,7 +99,7 @@ export class Room {
       mentions,
     }
     this.#history.push(message)
-    return { message, delivered, throttled }
+    return { message, delivered, throttled, everyoneThrottled }
   }
 
   members(): readonly Member[] {
@@ -105,7 +116,7 @@ export class Room {
     return limit === undefined ? slice : slice.slice(0, limit)
   }
 
-  #resolveTargets(speaker: string, mentions: readonly string[]): readonly string[] {
+  #resolveTargets(speaker: string, mentions: readonly string[]): ResolvedTargets {
     const targets = new Set<string>()
     let everyoneRequested = false
     for (const m of mentions) {
@@ -115,11 +126,15 @@ export class Room {
         targets.add(m)
       }
     }
-    if (everyoneRequested && this.#stormGuard.canTriggerEveryone()) {
-      this.#stormGuard.recordEveryoneTrigger()
-      for (const name of this.#members.keys()) targets.add(name)
+    let everyoneThrottled = false
+    if (everyoneRequested) {
+      if (this.#stormGuard.tryTriggerEveryone()) {
+        for (const name of this.#members.keys()) targets.add(name)
+      } else {
+        everyoneThrottled = true
+      }
     }
     targets.delete(speaker)
-    return [...targets]
+    return { targets: [...targets], everyoneThrottled }
   }
 }

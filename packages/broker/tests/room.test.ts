@@ -30,17 +30,25 @@ describe('Room', () => {
 
     test('rejects duplicate names', () => {
       room.join('Alice', 'one')
-      expect(() => room.join('Alice', 'two')).toThrow(ChatError)
+      expectChatError(() => room.join('Alice', 'two'), 'DUPLICATE_NAME')
     })
 
     test('rejects the reserved name `everyone`', () => {
-      expect(() => room.join('everyone', 'x')).toThrow(/reserved/i)
+      expectChatError(() => room.join('everyone', 'x'), 'RESERVED_NAME')
     })
 
     test('rejects names that do not match the pattern', () => {
-      expect(() => room.join('123Bad', 'x')).toThrow(ChatError)
-      expect(() => room.join('with space', 'x')).toThrow(ChatError)
-      expect(() => room.join('', 'x')).toThrow(ChatError)
+      expectChatError(() => room.join('123Bad', 'x'), 'INVALID_NAME')
+      expectChatError(() => room.join('with space', 'x'), 'INVALID_NAME')
+      expectChatError(() => room.join('', 'x'), 'INVALID_NAME')
+    })
+
+    test('rejects descriptions longer than 280 characters', () => {
+      expectChatError(() => room.join('A', 'x'.repeat(281)), 'INVALID_DESCRIPTION')
+    })
+
+    test('accepts a description of exactly 280 characters', () => {
+      expect(() => room.join('A', 'x'.repeat(280))).not.toThrow()
     })
   })
 
@@ -53,6 +61,29 @@ describe('Room', () => {
       room.join('Alice', 'x')
       room.leave('Alice')
       expect(room.members()).toHaveLength(0)
+    })
+
+    test('a member can re-join after leaving with a new description', () => {
+      room.join('Alice', 'first')
+      room.leave('Alice')
+      const m = room.join('Alice', 'second')
+      expect(m.description).toBe('second')
+    })
+  })
+
+  describe('members', () => {
+    test('returns currently-joined members', () => {
+      room.join('A', 'one')
+      room.join('B', 'two')
+      const names = room.members().map(m => m.name)
+      expect(new Set(names)).toEqual(new Set(['A', 'B']))
+    })
+
+    test('a member who left is no longer listed', () => {
+      room.join('A', '')
+      room.join('B', '')
+      room.leave('A')
+      expect(room.members().map(m => m.name)).toEqual(['B'])
     })
   })
 
@@ -78,6 +109,7 @@ describe('Room', () => {
       const r = room.speak('A', '@B come over')
       expect(r.delivered).toEqual(['B'])
       expect(r.throttled).toEqual([])
+      expect(r.everyoneThrottled).toBe(false)
     })
 
     test('multiple mentions deliver to each named member', () => {
@@ -101,6 +133,7 @@ describe('Room', () => {
       room.join('C', '')
       const r = room.speak('A', '@everyone heads up')
       expect(new Set(r.delivered)).toEqual(new Set(['B', 'C']))
+      expect(r.everyoneThrottled).toBe(false)
     })
 
     test('never wakes the speaker even when they self-@', () => {
@@ -110,7 +143,7 @@ describe('Room', () => {
       expect(r.delivered).toEqual(['B'])
     })
 
-    test('rejects messages past the hard cap', () => {
+    test('throws ROOM_FULL when the history hard cap is reached', () => {
       const small = new Room({ now, hardCap: 2 })
       small.join('A', '')
       small.speak('A', 'one')
@@ -133,6 +166,46 @@ describe('Room', () => {
       expect(r3.delivered).toEqual([])
       expect(r3.throttled).toEqual(['B'])
     })
+
+    test('leave resets the per-member wake budget so the member can re-join fresh', () => {
+      const guard = new StormGuard({
+        now,
+        perMemberWakeBudget: 1,
+        perMemberWindowMs: 60_000,
+      })
+      const tight = new Room({ now, stormGuard: guard })
+      tight.join('A', '')
+      tight.join('B', '')
+      tight.speak('A', '@B 1')
+      expect(tight.speak('A', '@B 2').throttled).toEqual(['B'])
+      tight.leave('B')
+      tight.join('B', '')
+      expect(tight.speak('A', '@B 3').delivered).toEqual(['B'])
+    })
+
+    test('flags everyoneThrottled when the @everyone cooldown is active', () => {
+      const guard = new StormGuard({ now, everyoneIntervalMs: 60_000 })
+      const r = new Room({ now, stormGuard: guard })
+      r.join('A', '')
+      r.join('B', '')
+      const r1 = r.speak('A', '@everyone hi')
+      expect(r1.everyoneThrottled).toBe(false)
+      const r2 = r.speak('A', '@everyone again')
+      expect(r2.everyoneThrottled).toBe(true)
+      expect(r2.delivered).toEqual([])
+    })
+
+    test('per-name mentions still deliver when @everyone is throttled', () => {
+      const guard = new StormGuard({ now, everyoneIntervalMs: 60_000 })
+      const r = new Room({ now, stormGuard: guard })
+      r.join('A', '')
+      r.join('B', '')
+      r.join('C', '')
+      r.speak('A', '@everyone first')
+      const r2 = r.speak('A', '@everyone @B hello')
+      expect(r2.everyoneThrottled).toBe(true)
+      expect(r2.delivered).toEqual(['B'])
+    })
   })
 
   describe('history', () => {
@@ -150,9 +223,18 @@ describe('Room', () => {
       expect(out.map(m => m.id)).toEqual([4, 5])
     })
 
+    test('sinceId past the end returns empty', () => {
+      expect(room.history({ sinceId: 99 })).toEqual([])
+    })
+
     test('limit truncates from the start of the filtered slice', () => {
       const out = room.history({ limit: 2 })
       expect(out.map(m => m.id)).toEqual([1, 2])
+    })
+
+    test('combines sinceId and limit', () => {
+      const out = room.history({ sinceId: 1, limit: 2 })
+      expect(out.map(m => m.id)).toEqual([2, 3])
     })
   })
 })
