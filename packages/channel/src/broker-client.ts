@@ -3,6 +3,7 @@ import {
   getDefaultStateDir,
   readAuthToken,
 } from '@cc-group-chat/shared'
+import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 export interface BrokerConnection {
@@ -88,12 +89,21 @@ function tryOpen(port: number): Promise<WebSocket | null> {
 
 /**
  * Default spawn: launches the broker daemon as a detached subprocess so it
- * outlives this channel server. The daemon entry is resolved relative to this
- * file inside the monorepo layout (`packages/channel/src` →
- * `packages/broker/src/daemon.ts`).
+ * outlives this channel server.
+ *
+ * Two deployment shapes resolve here:
+ *   - Production (plugin installed via marketplace): both bundles live next
+ *     to each other in `bin/` and Bun runs `bin/broker.js` directly.
+ *   - Development (running from source): the channel source lives at
+ *     `packages/channel/src` and the broker daemon source at
+ *     `packages/broker/src/daemon.ts`, two levels up.
  */
 function defaultSpawn(): void {
-  const daemonPath = resolve(import.meta.dirname, '../../broker/src/daemon.ts')
+  const here = import.meta.dirname
+  const bundle = resolve(here, 'broker.js')
+  const daemonPath = existsSync(bundle)
+    ? bundle
+    : resolve(here, '../../broker/src/daemon.ts')
   Bun.spawn({
     cmd: ['bun', daemonPath],
     stdout: 'ignore',

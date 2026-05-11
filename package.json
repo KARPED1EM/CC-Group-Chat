@@ -6,7 +6,7 @@
   "workspaces": ["packages/*"],
   "scripts": {
     "test": "bun test",
-    "spike": "bun ./packages/channel/src/echo.ts"
+    "build": "bun build packages/channel/src/server.ts --outfile bin/channel.js --target bun && bun build packages/broker/src/daemon.ts --outfile bin/broker.js --target bun"
   },
   "devDependencies": {
     "@types/bun": "1.3.13",

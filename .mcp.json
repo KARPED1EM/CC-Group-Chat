@@ -2,7 +2,7 @@
   "mcpServers": {
     "cc-group-chat": {
       "command": "bun",
-      "args": ["./packages/channel/src/server.ts"]
+      "args": ["./bin/channel.js"]
     }
   }
 }
