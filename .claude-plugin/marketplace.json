@@ -1,0 +1,17 @@
+{
+  "name": "cc-group-chat-marketplace",
+  "owner": {
+    "name": "KARPED1EM",
+    "email": "leever.zzz@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "cc-group-chat",
+      "source": {
+        "source": "github",
+        "repo": "KARPED1EM/CC-Group-Chat"
+      },
+      "description": "Cross-window group chat for Claude Code"
+    }
+  ]
+}

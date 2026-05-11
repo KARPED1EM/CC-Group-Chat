@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "echo": {
+    "cc-group-chat": {
       "command": "bun",
-      "args": ["./packages/channel/src/echo.ts"]
+      "args": ["./packages/channel/src/server.ts"]
     }
   }
 }
