@@ -1,6 +1,5 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
 import { Room } from '../src/room.ts'
-import { StormGuard } from '../src/storm-guard.ts'
 import { ChatError, type ChatErrorCode } from '../src/errors.ts'
 
 function expectChatError(fn: () => unknown, code: ChatErrorCode): void {
@@ -26,6 +25,7 @@ describe('Room', () => {
       expect(m.name).toBe('Alice')
       expect(m.description).toBe('engineer')
       expect(m.joinedAt).toBe(clock)
+      expect(m.engagement).toBe('engaged')
     })
 
     test('rejects duplicate names', () => {
@@ -92,11 +92,12 @@ describe('Room', () => {
       expectChatError(() => room.speak('Ghost', 'hi'), 'NOT_MEMBER')
     })
 
-    test('appends to history with monotonic ids', () => {
+    test('appends to history with monotonic ids and ok=true', () => {
       room.join('A', '')
       room.join('B', '')
       const r1 = room.speak('A', 'one')
       const r2 = room.speak('B', 'two')
+      expect(r1.ok).toBe(true)
       expect(r1.message.id).toBe(1)
       expect(r2.message.id).toBe(2)
       expect(room.history()).toHaveLength(2)
@@ -109,14 +110,12 @@ describe('Room', () => {
       expect(r.message.roomId).toBe('project-x')
     })
 
-    test('@target delivers to that member only', () => {
+    test('@target appears in delivered set', () => {
       room.join('A', '')
       room.join('B', '')
       room.join('C', '')
       const r = room.speak('A', '@B come over')
       expect(r.delivered).toEqual(['B'])
-      expect(r.throttled).toEqual([])
-      expect(r.everyoneThrottled).toBe(false)
     })
 
     test('multiple mentions deliver to each named member', () => {
@@ -140,10 +139,9 @@ describe('Room', () => {
       room.join('C', '')
       const r = room.speak('A', '@everyone heads up')
       expect(new Set(r.delivered)).toEqual(new Set(['B', 'C']))
-      expect(r.everyoneThrottled).toBe(false)
     })
 
-    test('never wakes the speaker even when they self-@', () => {
+    test('never delivers to the speaker even when they self-@', () => {
       room.join('A', '')
       room.join('B', '')
       const r = room.speak('A', '@A note to self @B fyi')
@@ -156,90 +154,6 @@ describe('Room', () => {
       small.speak('A', 'one')
       small.speak('A', 'two')
       expectChatError(() => small.speak('A', 'three'), 'ROOM_FULL')
-    })
-
-    test('throttles deliveries past the per-member wake budget', () => {
-      const guard = new StormGuard({
-        now,
-        perMemberWakeBudget: 2,
-        perMemberWindowMs: 60_000,
-      })
-      const tight = new Room({ now, stormGuard: guard })
-      tight.join('A', '')
-      tight.join('B', '')
-      tight.speak('A', '@B 1')
-      tight.speak('A', '@B 2')
-      const r3 = tight.speak('A', '@B 3')
-      expect(r3.delivered).toEqual([])
-      expect(r3.throttled).toEqual(['B'])
-    })
-
-    test('leave resets the per-member wake budget so the member can re-join fresh', () => {
-      const guard = new StormGuard({
-        now,
-        perMemberWakeBudget: 1,
-        perMemberWindowMs: 60_000,
-      })
-      const tight = new Room({ now, stormGuard: guard })
-      tight.join('A', '')
-      tight.join('B', '')
-      tight.speak('A', '@B 1')
-      expect(tight.speak('A', '@B 2').throttled).toEqual(['B'])
-      tight.leave('B')
-      tight.join('B', '')
-      expect(tight.speak('A', '@B 3').delivered).toEqual(['B'])
-    })
-
-    test('flags everyoneThrottled when the @everyone cooldown is active', () => {
-      const guard = new StormGuard({ now, everyoneIntervalMs: 60_000 })
-      const r = new Room({ now, stormGuard: guard })
-      r.join('A', '')
-      r.join('B', '')
-      const r1 = r.speak('A', '@everyone hi')
-      expect(r1.everyoneThrottled).toBe(false)
-      const r2 = r.speak('A', '@everyone again')
-      expect(r2.everyoneThrottled).toBe(true)
-      expect(r2.delivered).toEqual([])
-    })
-
-    test('a solo speaker @everyone does not burn the cooldown', () => {
-      const guard = new StormGuard({ now, everyoneIntervalMs: 60_000 })
-      const solo = new Room({ now, stormGuard: guard })
-      solo.join('A', '')
-      // A is alone — first @everyone has no audience and must not record the trigger.
-      const r1 = solo.speak('A', '@everyone hi there')
-      expect(r1.delivered).toEqual([])
-      expect(r1.everyoneThrottled).toBe(false)
-      // Bring in B and broadcast immediately — should succeed because the cooldown was preserved.
-      solo.join('B', '')
-      const r2 = solo.speak('A', '@everyone now you exist')
-      expect(r2.delivered).toEqual(['B'])
-      expect(r2.everyoneThrottled).toBe(false)
-    })
-
-    test('Room creates a storm guard from stormGuardOptions when no instance is provided', () => {
-      const tight = new Room({
-        now,
-        stormGuardOptions: { perMemberWakeBudget: 1, perMemberWindowMs: 60_000 },
-      })
-      tight.join('A', '')
-      tight.join('B', '')
-      tight.speak('A', '@B 1')
-      const r2 = tight.speak('A', '@B 2')
-      expect(r2.delivered).toEqual([])
-      expect(r2.throttled).toEqual(['B'])
-    })
-
-    test('per-name mentions still deliver when @everyone is throttled', () => {
-      const guard = new StormGuard({ now, everyoneIntervalMs: 60_000 })
-      const r = new Room({ now, stormGuard: guard })
-      r.join('A', '')
-      r.join('B', '')
-      r.join('C', '')
-      r.speak('A', '@everyone first')
-      const r2 = r.speak('A', '@everyone @B hello')
-      expect(r2.everyoneThrottled).toBe(true)
-      expect(r2.delivered).toEqual(['B'])
     })
   })
 
@@ -264,21 +178,6 @@ describe('Room', () => {
       small.recordActivity('A')
       clock += 999
       expect(small.members()[0]!.engagement).toBe('engaged')
-    })
-
-    test('speak counts as activity for the speaker', () => {
-      const small = new Room({ now, engagementWindowMs: 1000 })
-      small.join('A', '')
-      small.join('B', '')
-      clock += 1500
-      // Both should be idle at this point
-      expect(small.members().every(m => m.engagement === 'idle')).toBe(true)
-
-      // Activity recording (broker would do this on speak)
-      small.recordActivity('A')
-      const ms = small.members()
-      expect(ms.find(m => m.name === 'A')!.engagement).toBe('engaged')
-      expect(ms.find(m => m.name === 'B')!.engagement).toBe('idle')
     })
 
     test('recordActivity for a non-member is a no-op', () => {

@@ -1,7 +1,6 @@
-import type { Engagement, Member, RoomMessage, SpeakResult } from '@cc-group-chat/shared'
+import type { Engagement, Member, RoomMessage, SpeakOk } from '@cc-group-chat/shared'
 import { ChatError } from './errors.ts'
 import { EVERYONE, parseMentions } from './mentions.ts'
-import { StormGuard, type StormGuardOptions } from './storm-guard.ts'
 
 const NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/
 const RESERVED_NAMES: ReadonlySet<string> = new Set([EVERYONE])
@@ -14,14 +13,8 @@ export interface RoomOptions {
   /** Stable identifier stamped onto every message originating in this room. */
   readonly id?: string
   readonly now?: () => number
+  /** Max history retained per room before further `speak` throws ROOM_FULL. */
   readonly hardCap?: number
-  /** Pre-built storm guard. Takes precedence over `stormGuardOptions`. */
-  readonly stormGuard?: StormGuard
-  /**
-   * Options for the storm guard the room creates if `stormGuard` is not
-   * provided. `now` is inherited from the room.
-   */
-  readonly stormGuardOptions?: Omit<StormGuardOptions, 'now'>
   /**
    * Time since a member's last activity before they are reported as `idle`.
    * Defaults to 60 seconds.
@@ -40,16 +33,15 @@ interface MemberData {
   readonly joinedAt: number
 }
 
-interface ResolvedTargets {
-  readonly targets: readonly string[]
-  readonly everyoneThrottled: boolean
-}
-
+/**
+ * Pure-logic chat room. Owns membership, history, and `@`-routing. Knows
+ * nothing about transports, sessions, rate limits, or push delivery —
+ * those concerns live one layer up in `Broker`.
+ */
 export class Room {
   readonly #id: string
   readonly #now: () => number
   readonly #hardCap: number
-  readonly #stormGuard: StormGuard
   readonly #engagementWindowMs: number
   readonly #members = new Map<string, MemberData>()
   readonly #lastActivityAt = new Map<string, number>()
@@ -60,10 +52,6 @@ export class Room {
     this.#id = opts.id ?? DEFAULT_ROOM_ID
     this.#now = opts.now ?? Date.now
     this.#hardCap = opts.hardCap ?? DEFAULT_HARD_CAP
-    this.#stormGuard = opts.stormGuard ?? new StormGuard({
-      now: this.#now,
-      ...opts.stormGuardOptions,
-    })
     this.#engagementWindowMs = opts.engagementWindowMs ?? DEFAULT_ENGAGEMENT_WINDOW_MS
   }
 
@@ -100,21 +88,23 @@ export class Room {
   leave(name: string): void {
     this.#members.delete(name)
     this.#lastActivityAt.delete(name)
-    this.#stormGuard.forget(name)
   }
 
-  /**
-   * Refresh a member's last-activity stamp. Called by the Broker on every
-   * incoming tool call so that the computed engagement reflects what the
-   * member is doing.
-   */
   recordActivity(name: string): void {
     if (this.#members.has(name)) {
       this.#lastActivityAt.set(name, this.#now())
     }
   }
 
-  speak(from: string, text: string): SpeakResult {
+  /**
+   * Append `text` from `from` and compute the recipient set.
+   *
+   * Returns `SpeakOk` with `delivered` = every member that should receive a
+   * push (the speaker is never in this set). Rate limiting and storm
+   * protection are NOT this layer's concern; callers gate `speak` upstream
+   * if necessary.
+   */
+  speak(from: string, text: string): SpeakOk {
     if (!this.#members.has(from)) {
       throw new ChatError('NOT_MEMBER', `'${from}' is not in the room`)
     }
@@ -126,17 +116,7 @@ export class Room {
     }
 
     const mentions = parseMentions(text)
-    const { targets, everyoneThrottled } = this.#resolveTargets(from, mentions)
-
-    const delivered: string[] = []
-    const throttled: string[] = []
-    for (const target of targets) {
-      if (this.#stormGuard.tryDeliverTo(target)) {
-        delivered.push(target)
-      } else {
-        throttled.push(target)
-      }
-    }
+    const targets = this.#resolveTargets(from, mentions)
 
     const message: RoomMessage = {
       id: this.#nextId++,
@@ -147,7 +127,7 @@ export class Room {
       mentions,
     }
     this.#history.push(message)
-    return { message, delivered, throttled, everyoneThrottled }
+    return { ok: true, message, delivered: targets }
   }
 
   members(): readonly Member[] {
@@ -162,7 +142,6 @@ export class Room {
     return result
   }
 
-  /** True when no members are currently joined. */
   isEmpty(): boolean {
     return this.#members.size === 0
   }
@@ -177,38 +156,16 @@ export class Room {
     return limit === undefined ? slice : slice.slice(0, limit)
   }
 
-  #resolveTargets(speaker: string, mentions: readonly string[]): ResolvedTargets {
+  #resolveTargets(speaker: string, mentions: readonly string[]): readonly string[] {
     const targets = new Set<string>()
-    let everyoneRequested = false
     for (const m of mentions) {
       if (m === EVERYONE) {
-        everyoneRequested = true
+        for (const name of this.#members.keys()) targets.add(name)
       } else if (this.#members.has(m)) {
         targets.add(m)
       }
     }
-    let everyoneThrottled = false
-    if (everyoneRequested) {
-      // Skip the cooldown entirely when the speaker is the only member —
-      // the broadcast would reach no one, so charging the cooldown is a
-      // bug-by-design (the next real @everyone could be wrongly blocked).
-      const otherMembersExist = this.#otherMembersExist(speaker)
-      if (!otherMembersExist) {
-        // no-op: nothing to deliver, no cooldown charge
-      } else if (this.#stormGuard.tryTriggerEveryone()) {
-        for (const name of this.#members.keys()) targets.add(name)
-      } else {
-        everyoneThrottled = true
-      }
-    }
     targets.delete(speaker)
-    return { targets: [...targets], everyoneThrottled }
-  }
-
-  #otherMembersExist(speaker: string): boolean {
-    for (const name of this.#members.keys()) {
-      if (name !== speaker) return true
-    }
-    return false
+    return [...targets]
   }
 }

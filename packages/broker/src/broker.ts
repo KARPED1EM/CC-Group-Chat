@@ -1,25 +1,30 @@
-import type { Member, RoomMessage, SpeakResult } from '@cc-group-chat/shared'
+import type { Member, RoomBatch, RoomMessage, SpeakResult } from '@cc-group-chat/shared'
 import { ChatError } from './errors.ts'
+import { SenderRateLimiter, type SenderRateLimiterOptions } from './rate-limiter.ts'
 import type { RoomOptions } from './room.ts'
 import { RoomManager } from './room-manager.ts'
 
-/** Callback the broker invokes to push a room event to a single connection. */
-export type PushFn = (event: RoomMessage) => void
+/** Callback the broker invokes to push a batch of room events to a single connection. */
+export type PushFn = (batch: RoomBatch) => void
 
 /** Opaque per-connection identifier returned by `Broker.connect`. */
 export type ConnectionHandle = symbol
 
 interface ConnectionState {
-  /** Member name bound after `join`. */
   memberName: string | undefined
-  /** Room id bound after `join`. */
   roomId: string | undefined
   readonly send: PushFn
 }
 
+interface PendingBatch {
+  readonly roomId: string
+  readonly messages: RoomMessage[]
+  timer: ReturnType<typeof setTimeout> | undefined
+}
+
 export interface BrokerOptions {
   /**
-   * Defaults applied to every room (clock, hard cap, storm guard). The
+   * Defaults applied to every room (clock, hard cap, engagement window). The
    * `now` field doubles as the RoomManager's clock used for GC timing.
    */
   readonly room?: Omit<RoomOptions, 'id'>
@@ -31,6 +36,17 @@ export interface BrokerOptions {
    * that exercise the room state machine without the auth handshake).
    */
   readonly authToken?: string
+  /**
+   * Options for the per-sender rate limiter (max messages / window). The
+   * limiter's clock comes from `room.now` if set, otherwise `Date.now`.
+   */
+  readonly rateLimit?: Omit<SenderRateLimiterOptions, 'now'>
+  /**
+   * Push batching window in milliseconds. Multiple messages for the same
+   * recipient arriving within this window are coalesced into one push.
+   * Default `50`. Set to `0` for synchronous delivery (used by tests).
+   */
+  readonly pushBatchMs?: number
 }
 
 export interface JoinRequestParams {
@@ -40,43 +56,53 @@ export interface JoinRequestParams {
   readonly authToken?: string
 }
 
+const DEFAULT_PUSH_BATCH_MS = 50
+
 /**
  * Multi-room, multi-connection façade.
  *
  * Each Claude Code session opens one connection and joins exactly one
  * (room, name) pair. Subsequent speak / read_history / list_members /
- * leave calls implicitly operate on that bound room. Push events for a
- * message are routed only to the handles bound to the same room.
+ * leave calls implicitly operate on that bound room. Messages destined
+ * for a single recipient are coalesced through a per-connection batching
+ * window before being pushed, so an orchestrator that receives N answers
+ * in quick succession wakes once.
  *
- * Cross-room visibility is impossible by design: a connection has no API
- * for naming another room id, and the broker rejects requests whose handle
- * is bound to a different room.
+ * The broker enforces a per-sender rate limit: at most N messages per
+ * window. If a sender exceeds the limit, `speak` returns `ok: false,
+ * reason: 'rate_limited'`; the message is not stored and not pushed.
+ * This is the only mechanism by which messages are dropped; there is no
+ * recipient-side throttle.
  */
 export class Broker {
   readonly #rooms: RoomManager
   readonly #authToken: string | undefined
+  readonly #rateLimiter: SenderRateLimiter
+  readonly #pushBatchMs: number
   readonly #connections = new Map<ConnectionHandle, ConnectionState>()
   /** Maps (roomId, memberName) to the connection handle currently bound to it. */
   readonly #memberToHandle = new Map<string, ConnectionHandle>()
+  readonly #pendingBatches = new Map<ConnectionHandle, PendingBatch>()
   #nextHandleId = 1
 
   constructor(opts: BrokerOptions = {}) {
+    const now = opts.room?.now ?? Date.now
     this.#rooms = new RoomManager({
-      now: opts.room?.now,
+      now,
       roomOptions: opts.room,
       historyTtlMs: opts.historyTtlMs,
     })
     this.#authToken = opts.authToken
+    this.#rateLimiter = new SenderRateLimiter({ now, ...opts.rateLimit })
+    this.#pushBatchMs = opts.pushBatchMs ?? DEFAULT_PUSH_BATCH_MS
   }
 
-  /** Run a sweep of the underlying room manager. Exposed so daemons can schedule it. */
-  gc(): readonly string[] {
-    return this.#rooms.gc()
-  }
-
-  /** Exposed for tests and ops. Do not use for application routing. */
   get rooms(): RoomManager {
     return this.#rooms
+  }
+
+  gc(): readonly string[] {
+    return this.#rooms.gc()
   }
 
   connect(send: PushFn): ConnectionHandle {
@@ -88,6 +114,7 @@ export class Broker {
   disconnect(handle: ConnectionHandle): void {
     const conn = this.#connections.get(handle)
     if (!conn) return
+    this.#cancelPendingBatch(handle)
     if (conn.roomId !== undefined && conn.memberName !== undefined) {
       const room = this.#rooms.get(conn.roomId)
       if (room) {
@@ -95,6 +122,7 @@ export class Broker {
         this.#rooms.recordMembershipChange(conn.roomId)
       }
       this.#memberToHandle.delete(membershipKey(conn.roomId, conn.memberName))
+      this.#rateLimiter.forget(conn.memberName)
     }
     this.#connections.delete(handle)
   }
@@ -128,16 +156,20 @@ export class Broker {
       this.#rooms.recordMembershipChange(conn.roomId)
     }
     this.#memberToHandle.delete(membershipKey(conn.roomId, conn.memberName))
+    this.#rateLimiter.forget(conn.memberName)
     conn.memberName = undefined
     conn.roomId = undefined
   }
 
   speak(handle: ConnectionHandle, params: { readonly text: string }): SpeakResult {
     const { roomId, memberName } = this.#requireJoined(handle)
+    if (!this.#rateLimiter.tryRecord(memberName)) {
+      return { ok: false, reason: 'rate_limited' }
+    }
     const room = this.#requireRoom(roomId)
     room.recordActivity(memberName)
     const result = room.speak(memberName, params.text)
-    for (const target of result.delivered) this.#push(roomId, target, result.message)
+    for (const target of result.delivered) this.#enqueuePush(roomId, target, result.message)
     return result
   }
 
@@ -158,11 +190,44 @@ export class Broker {
     return { members: room.members() }
   }
 
-  #push(roomId: string, memberName: string, event: RoomMessage): void {
+  #enqueuePush(roomId: string, memberName: string, message: RoomMessage): void {
     const handle = this.#memberToHandle.get(membershipKey(roomId, memberName))
     if (!handle) return
+
+    if (this.#pushBatchMs === 0) {
+      this.#sendBatch(handle, { roomId, messages: [message] })
+      return
+    }
+
+    let pending = this.#pendingBatches.get(handle)
+    if (!pending) {
+      pending = { roomId, messages: [], timer: undefined }
+      this.#pendingBatches.set(handle, pending)
+    }
+    pending.messages.push(message)
+    if (pending.timer === undefined) {
+      pending.timer = setTimeout(() => this.#flushBatch(handle), this.#pushBatchMs)
+    }
+  }
+
+  #flushBatch(handle: ConnectionHandle): void {
+    const pending = this.#pendingBatches.get(handle)
+    if (!pending) return
+    this.#pendingBatches.delete(handle)
+    if (pending.messages.length === 0) return
+    this.#sendBatch(handle, { roomId: pending.roomId, messages: pending.messages })
+  }
+
+  #cancelPendingBatch(handle: ConnectionHandle): void {
+    const pending = this.#pendingBatches.get(handle)
+    if (pending?.timer !== undefined) clearTimeout(pending.timer)
+    this.#pendingBatches.delete(handle)
+  }
+
+  #sendBatch(handle: ConnectionHandle, batch: RoomBatch): void {
     const conn = this.#connections.get(handle)
-    conn?.send(event)
+    if (!conn) return
+    conn.send(batch)
   }
 
   #requireConnected(handle: ConnectionHandle): ConnectionState {
@@ -182,8 +247,6 @@ export class Broker {
   #requireRoom(roomId: string) {
     const room = this.#rooms.get(roomId)
     if (!room) {
-      // Should not happen — the room exists for as long as a connection is
-      // bound to it. Treat as internal invariant breach.
       throw new ChatError('NOT_MEMBER', `Room '${roomId}' has been evicted`)
     }
     return room
@@ -191,7 +254,5 @@ export class Broker {
 }
 
 function membershipKey(roomId: string, memberName: string): string {
-  // Room ids and member names both match `[A-Za-z][A-Za-z0-9_-]*`, so the
-  // `:` separator cannot collide with their content.
   return `${roomId}:${memberName}`
 }

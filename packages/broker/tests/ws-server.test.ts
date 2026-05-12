@@ -38,7 +38,7 @@ describe('startWsServer', () => {
   let broker: Broker
 
   beforeEach(() => {
-    broker = new Broker({ room: { now: () => 1_700_000_000_000 } })
+    broker = new Broker({ room: { now: () => 1_700_000_000_000 }, pushBatchMs: 0 })
     server = startWsServer(broker)
   })
 
@@ -66,7 +66,7 @@ describe('startWsServer', () => {
     ws.close()
   })
 
-  test('pushes room_event to mentioned member', async () => {
+  test('pushes room_batch to mentioned member', async () => {
     const a = await open(server.url)
     const b = await open(server.url)
 
@@ -79,12 +79,14 @@ describe('startWsServer', () => {
     const pushed = next(b)
     a.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'speak', params: { text: '@B come here' } }))
 
-    // a will receive the speak reply, b will receive the room_event push
-    await next(a)
+    await next(a)  // speak's own reply
     const event = await pushed
-    expect(event.method).toBe(METHOD.RoomEvent)
-    expect((event.params as { from: string }).from).toBe('A')
-    expect((event.params as { text: string }).text).toBe('@B come here')
+    expect(event.method).toBe(METHOD.RoomBatch)
+    const params = event.params as { roomId: string; messages: Array<{ from: string; text: string }> }
+    expect(params.roomId).toBe('main')
+    expect(params.messages).toHaveLength(1)
+    expect(params.messages[0]!.from).toBe('A')
+    expect(params.messages[0]!.text).toBe('@B come here')
     expect(event.id).toBeUndefined()
 
     a.close(); b.close()
@@ -100,11 +102,11 @@ describe('startWsServer', () => {
     await next(b)
 
     a.close()
-    await sleep(50) // let the server process the close event
+    await sleep(50)
 
     b.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'list_members', params: {} }))
     const list = await next(b)
-    expect((list.result as { members: Array<{ roomId: 'main', name: string }> }).members.map(m => m.name)).toEqual(['B'])
+    expect((list.result as { members: Array<{ name: string }> }).members.map(m => m.name)).toEqual(['B'])
 
     b.close()
   })

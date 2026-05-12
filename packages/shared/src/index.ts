@@ -1,4 +1,12 @@
-export type { Engagement, Member, RoomMessage, SpeakResult } from './types.ts'
+export type {
+  Engagement,
+  Member,
+  RoomBatch,
+  RoomMessage,
+  SpeakOk,
+  SpeakRateLimited,
+  SpeakResult,
+} from './types.ts'
 export {
   JSON_RPC_VERSION,
   METHOD,
@@ -27,7 +35,7 @@ export {
   type ReadHistoryResult,
   type ListMembersParams,
   type ListMembersResult,
-  type RoomEventParams,
+  type RoomBatchParams,
 } from './protocol.ts'
 export {
   STATE_FILE_VERSION,

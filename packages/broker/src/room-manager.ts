@@ -8,8 +8,8 @@ export interface RoomManagerOptions {
   /** Clock used for `lastEmptyAt` timestamps and GC decisions. */
   readonly now?: () => number
   /**
-   * Default options for newly-created rooms (clock, hard cap, storm guard
-   * shape). The room's own `id` is set by `getOrCreate`.
+   * Default options for newly-created rooms (clock, hard cap, engagement
+   * window). The room's own `id` is set by `getOrCreate`.
    */
   readonly roomOptions?: Omit<RoomOptions, 'id'>
   /** Empty rooms older than this are garbage-collected. Default 7 days. */
@@ -99,7 +99,6 @@ export class RoomManager {
     return removed
   }
 
-  /** Test helpers. */
   has(roomId: string): boolean {
     return this.#entries.has(roomId)
   }

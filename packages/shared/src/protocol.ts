@@ -8,7 +8,7 @@
 // authenticated as that member.
 
 import { z } from 'zod'
-import type { Member, RoomMessage, SpeakResult } from './types.ts'
+import type { Member, RoomBatch, RoomMessage, SpeakResult } from './types.ts'
 
 // ===== JSON-RPC 2.0 envelopes =====
 
@@ -56,7 +56,8 @@ export const METHOD = {
   Speak: 'speak',
   ReadHistory: 'read_history',
   ListMembers: 'list_members',
-  RoomEvent: 'room_event',
+  /** Server → client push: a batch of one or more room messages destined for the receiving connection. */
+  RoomBatch: 'room_batch',
 } as const
 
 export type MethodName = (typeof METHOD)[keyof typeof METHOD]
@@ -122,8 +123,8 @@ export interface ListMembersResult {
   readonly members: readonly Member[]
 }
 
-/** Push notification from broker to client when the client's member is woken. */
-export type RoomEventParams = RoomMessage
+/** Push notification body sent by the broker to wake a single client. */
+export type RoomBatchParams = RoomBatch
 
 // ===== JSON-RPC error codes =====
 

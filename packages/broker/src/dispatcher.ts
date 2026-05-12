@@ -11,7 +11,7 @@ import {
   type JsonRpcError,
   type JsonRpcNotification,
   type JsonRpcSuccess,
-  type RoomEventParams,
+  type RoomBatchParams,
 } from '@cc-group-chat/shared'
 import { Broker, type ConnectionHandle } from './broker.ts'
 import { ChatError } from './errors.ts'
@@ -65,12 +65,12 @@ export function dispatch(
   }
 }
 
-/** Wraps a `RoomMessage` push as a JSON-RPC notification. */
-export function formatRoomEventNotification(event: RoomEventParams): string {
-  const notif: JsonRpcNotification<typeof METHOD.RoomEvent, RoomEventParams> = {
+/** Wraps a `RoomBatch` push as a JSON-RPC notification. */
+export function formatRoomBatchNotification(batch: RoomBatchParams): string {
+  const notif: JsonRpcNotification<typeof METHOD.RoomBatch, RoomBatchParams> = {
     jsonrpc: JSON_RPC_VERSION,
-    method: METHOD.RoomEvent,
-    params: event,
+    method: METHOD.RoomBatch,
+    params: batch,
   }
   return JSON.stringify(notif)
 }

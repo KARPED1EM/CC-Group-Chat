@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from 'bun'
 import { Broker, type ConnectionHandle } from './broker.ts'
-import { dispatch, formatRoomEventNotification } from './dispatcher.ts'
+import { dispatch, formatRoomBatchNotification } from './dispatcher.ts'
 
 export interface WsServerOptions {
   readonly hostname?: string
@@ -39,8 +39,8 @@ export function startWsServer(broker: Broker, opts: WsServerOptions = {}): Runni
     },
     websocket: {
       open(ws: ServerWebSocket<WsData>) {
-        ws.data.handle = broker.connect((event) => {
-          ws.send(formatRoomEventNotification(event))
+        ws.data.handle = broker.connect((batch) => {
+          ws.send(formatRoomBatchNotification(batch))
         })
       },
       message(ws: ServerWebSocket<WsData>, msg: string | Buffer) {

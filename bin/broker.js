@@ -14299,7 +14299,7 @@ var METHOD = {
   Speak: "speak",
   ReadHistory: "read_history",
   ListMembers: "list_members",
-  RoomEvent: "room_event"
+  RoomBatch: "room_batch"
 };
 var IdSchema = exports_external.union([exports_external.number(), exports_external.string()]);
 var RequestEnvelopeSchema = exports_external.strictObject({
@@ -14398,6 +14398,45 @@ class ChatError extends Error {
   }
 }
 
+// packages/broker/src/rate-limiter.ts
+var DEFAULTS = {
+  maxPerWindow: 30,
+  windowMs: 60000
+};
+
+class SenderRateLimiter {
+  #now;
+  #maxPerWindow;
+  #windowMs;
+  #timestamps = new Map;
+  constructor(opts) {
+    this.#now = opts.now;
+    this.#maxPerWindow = opts.maxPerWindow ?? DEFAULTS.maxPerWindow;
+    this.#windowMs = opts.windowMs ?? DEFAULTS.windowMs;
+  }
+  tryRecord(sender) {
+    const pruned = this.#prunedTimestamps(sender);
+    if (pruned.length >= this.#maxPerWindow)
+      return false;
+    pruned.push(this.#now());
+    return true;
+  }
+  forget(sender) {
+    this.#timestamps.delete(sender);
+  }
+  #prunedTimestamps(sender) {
+    const cutoff = this.#now() - this.#windowMs;
+    let list = this.#timestamps.get(sender);
+    if (!list) {
+      list = [];
+      this.#timestamps.set(sender, list);
+    }
+    while (list.length > 0 && list[0] < cutoff)
+      list.shift();
+    return list;
+  }
+}
+
 // packages/broker/src/mentions.ts
 var NAME_REGEX = /^@([A-Za-z][A-Za-z0-9_-]*)/;
 var EVERYONE = "everyone";
@@ -14438,55 +14477,6 @@ function parseMentions(text) {
   return [...found];
 }
 
-// packages/broker/src/storm-guard.ts
-var DEFAULTS = {
-  perMemberWakeBudget: 10,
-  perMemberWindowMs: 5 * 60 * 1000,
-  everyoneIntervalMs: 60 * 1000
-};
-
-class StormGuard {
-  #now;
-  #budget;
-  #windowMs;
-  #everyoneIntervalMs;
-  #wakes = new Map;
-  #lastEveryoneTrigger = Number.NEGATIVE_INFINITY;
-  constructor(opts) {
-    this.#now = opts.now;
-    this.#budget = opts.perMemberWakeBudget ?? DEFAULTS.perMemberWakeBudget;
-    this.#windowMs = opts.perMemberWindowMs ?? DEFAULTS.perMemberWindowMs;
-    this.#everyoneIntervalMs = opts.everyoneIntervalMs ?? DEFAULTS.everyoneIntervalMs;
-  }
-  tryDeliverTo(name) {
-    const wakes = this.#prunedWakes(name);
-    if (wakes.length >= this.#budget)
-      return false;
-    wakes.push(this.#now());
-    return true;
-  }
-  tryTriggerEveryone() {
-    if (this.#now() - this.#lastEveryoneTrigger < this.#everyoneIntervalMs)
-      return false;
-    this.#lastEveryoneTrigger = this.#now();
-    return true;
-  }
-  forget(name) {
-    this.#wakes.delete(name);
-  }
-  #prunedWakes(name) {
-    const cutoff = this.#now() - this.#windowMs;
-    let list = this.#wakes.get(name);
-    if (!list) {
-      list = [];
-      this.#wakes.set(name, list);
-    }
-    while (list.length > 0 && list[0] < cutoff)
-      list.shift();
-    return list;
-  }
-}
-
 // packages/broker/src/room.ts
 var NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 var RESERVED_NAMES = new Set([EVERYONE]);
@@ -14499,7 +14489,6 @@ class Room {
   #id;
   #now;
   #hardCap;
-  #stormGuard;
   #engagementWindowMs;
   #members = new Map;
   #lastActivityAt = new Map;
@@ -14509,10 +14498,6 @@ class Room {
     this.#id = opts.id ?? DEFAULT_ROOM_ID;
     this.#now = opts.now ?? Date.now;
     this.#hardCap = opts.hardCap ?? DEFAULT_HARD_CAP;
-    this.#stormGuard = opts.stormGuard ?? new StormGuard({
-      now: this.#now,
-      ...opts.stormGuardOptions
-    });
     this.#engagementWindowMs = opts.engagementWindowMs ?? DEFAULT_ENGAGEMENT_WINDOW_MS;
   }
   get id() {
@@ -14540,7 +14525,6 @@ class Room {
   leave(name) {
     this.#members.delete(name);
     this.#lastActivityAt.delete(name);
-    this.#stormGuard.forget(name);
   }
   recordActivity(name) {
     if (this.#members.has(name)) {
@@ -14555,16 +14539,7 @@ class Room {
       throw new ChatError("ROOM_FULL", `Room hard cap of ${this.#hardCap} messages reached`);
     }
     const mentions = parseMentions(text);
-    const { targets, everyoneThrottled } = this.#resolveTargets(from, mentions);
-    const delivered = [];
-    const throttled = [];
-    for (const target of targets) {
-      if (this.#stormGuard.tryDeliverTo(target)) {
-        delivered.push(target);
-      } else {
-        throttled.push(target);
-      }
-    }
+    const targets = this.#resolveTargets(from, mentions);
     const message = {
       id: this.#nextId++,
       roomId: this.#id,
@@ -14574,7 +14549,7 @@ class Room {
       mentions
     };
     this.#history.push(message);
-    return { message, delivered, throttled, everyoneThrottled };
+    return { ok: true, message, delivered: targets };
   }
   members() {
     const now = this.#now();
@@ -14599,33 +14574,16 @@ class Room {
   }
   #resolveTargets(speaker, mentions) {
     const targets = new Set;
-    let everyoneRequested = false;
     for (const m of mentions) {
       if (m === EVERYONE) {
-        everyoneRequested = true;
+        for (const name of this.#members.keys())
+          targets.add(name);
       } else if (this.#members.has(m)) {
         targets.add(m);
       }
     }
-    let everyoneThrottled = false;
-    if (everyoneRequested) {
-      const otherMembersExist = this.#otherMembersExist(speaker);
-      if (!otherMembersExist) {} else if (this.#stormGuard.tryTriggerEveryone()) {
-        for (const name of this.#members.keys())
-          targets.add(name);
-      } else {
-        everyoneThrottled = true;
-      }
-    }
     targets.delete(speaker);
-    return { targets: [...targets], everyoneThrottled };
-  }
-  #otherMembersExist(speaker) {
-    for (const name of this.#members.keys()) {
-      if (name !== speaker)
-        return true;
-    }
-    return false;
+    return [...targets];
   }
 }
 
@@ -14691,25 +14649,33 @@ class RoomManager {
 }
 
 // packages/broker/src/broker.ts
+var DEFAULT_PUSH_BATCH_MS = 50;
+
 class Broker {
   #rooms;
   #authToken;
+  #rateLimiter;
+  #pushBatchMs;
   #connections = new Map;
   #memberToHandle = new Map;
+  #pendingBatches = new Map;
   #nextHandleId = 1;
   constructor(opts = {}) {
+    const now = opts.room?.now ?? Date.now;
     this.#rooms = new RoomManager({
-      now: opts.room?.now,
+      now,
       roomOptions: opts.room,
       historyTtlMs: opts.historyTtlMs
     });
     this.#authToken = opts.authToken;
-  }
-  gc() {
-    return this.#rooms.gc();
+    this.#rateLimiter = new SenderRateLimiter({ now, ...opts.rateLimit });
+    this.#pushBatchMs = opts.pushBatchMs ?? DEFAULT_PUSH_BATCH_MS;
   }
   get rooms() {
     return this.#rooms;
+  }
+  gc() {
+    return this.#rooms.gc();
   }
   connect(send) {
     const handle = Symbol(`conn#${this.#nextHandleId++}`);
@@ -14720,6 +14686,7 @@ class Broker {
     const conn = this.#connections.get(handle);
     if (!conn)
       return;
+    this.#cancelPendingBatch(handle);
     if (conn.roomId !== undefined && conn.memberName !== undefined) {
       const room = this.#rooms.get(conn.roomId);
       if (room) {
@@ -14727,6 +14694,7 @@ class Broker {
         this.#rooms.recordMembershipChange(conn.roomId);
       }
       this.#memberToHandle.delete(membershipKey(conn.roomId, conn.memberName));
+      this.#rateLimiter.forget(conn.memberName);
     }
     this.#connections.delete(handle);
   }
@@ -14756,16 +14724,20 @@ class Broker {
       this.#rooms.recordMembershipChange(conn.roomId);
     }
     this.#memberToHandle.delete(membershipKey(conn.roomId, conn.memberName));
+    this.#rateLimiter.forget(conn.memberName);
     conn.memberName = undefined;
     conn.roomId = undefined;
   }
   speak(handle, params) {
     const { roomId, memberName } = this.#requireJoined(handle);
+    if (!this.#rateLimiter.tryRecord(memberName)) {
+      return { ok: false, reason: "rate_limited" };
+    }
     const room = this.#requireRoom(roomId);
     room.recordActivity(memberName);
     const result = room.speak(memberName, params.text);
     for (const target of result.delivered)
-      this.#push(roomId, target, result.message);
+      this.#enqueuePush(roomId, target, result.message);
     return result;
   }
   readHistory(handle, params) {
@@ -14780,12 +14752,44 @@ class Broker {
     room.recordActivity(memberName);
     return { members: room.members() };
   }
-  #push(roomId, memberName, event) {
+  #enqueuePush(roomId, memberName, message) {
     const handle = this.#memberToHandle.get(membershipKey(roomId, memberName));
     if (!handle)
       return;
+    if (this.#pushBatchMs === 0) {
+      this.#sendBatch(handle, { roomId, messages: [message] });
+      return;
+    }
+    let pending = this.#pendingBatches.get(handle);
+    if (!pending) {
+      pending = { roomId, messages: [], timer: undefined };
+      this.#pendingBatches.set(handle, pending);
+    }
+    pending.messages.push(message);
+    if (pending.timer === undefined) {
+      pending.timer = setTimeout(() => this.#flushBatch(handle), this.#pushBatchMs);
+    }
+  }
+  #flushBatch(handle) {
+    const pending = this.#pendingBatches.get(handle);
+    if (!pending)
+      return;
+    this.#pendingBatches.delete(handle);
+    if (pending.messages.length === 0)
+      return;
+    this.#sendBatch(handle, { roomId: pending.roomId, messages: pending.messages });
+  }
+  #cancelPendingBatch(handle) {
+    const pending = this.#pendingBatches.get(handle);
+    if (pending?.timer !== undefined)
+      clearTimeout(pending.timer);
+    this.#pendingBatches.delete(handle);
+  }
+  #sendBatch(handle, batch) {
     const conn = this.#connections.get(handle);
-    conn?.send(event);
+    if (!conn)
+      return;
+    conn.send(batch);
   }
   #requireConnected(handle) {
     const conn = this.#connections.get(handle);
@@ -14842,11 +14846,11 @@ function dispatch(broker, handle, rawMessage) {
     return rpcError(id, RPC_ERROR_CODES.InternalError, message);
   }
 }
-function formatRoomEventNotification(event) {
+function formatRoomBatchNotification(batch) {
   const notif = {
     jsonrpc: JSON_RPC_VERSION,
-    method: METHOD.RoomEvent,
-    params: event
+    method: METHOD.RoomBatch,
+    params: batch
   };
   return JSON.stringify(notif);
 }
@@ -14941,8 +14945,8 @@ function startWsServer(broker, opts = {}) {
     },
     websocket: {
       open(ws) {
-        ws.data.handle = broker.connect((event) => {
-          ws.send(formatRoomEventNotification(event));
+        ws.data.handle = broker.connect((batch) => {
+          ws.send(formatRoomBatchNotification(batch));
         });
       },
       message(ws, msg) {
@@ -14980,13 +14984,13 @@ var authToken = await ensureAuthToken(stateDir);
 var broker = new Broker({
   authToken,
   room: {
-    hardCap: getEnvPositiveInt("CC_GROUP_CHAT_HARD_CAP"),
-    stormGuardOptions: {
-      everyoneIntervalMs: getEnvPositiveInt("CC_GROUP_CHAT_EVERYONE_COOLDOWN_MS"),
-      perMemberWakeBudget: getEnvPositiveInt("CC_GROUP_CHAT_WAKE_BUDGET"),
-      perMemberWindowMs: getEnvPositiveInt("CC_GROUP_CHAT_WAKE_WINDOW_MS")
-    }
-  }
+    hardCap: getEnvPositiveInt("CC_GROUP_CHAT_HARD_CAP")
+  },
+  rateLimit: {
+    maxPerWindow: getEnvPositiveInt("CC_GROUP_CHAT_RATE_LIMIT_MAX"),
+    windowMs: getEnvPositiveInt("CC_GROUP_CHAT_RATE_LIMIT_WINDOW_MS")
+  },
+  pushBatchMs: getEnvNonNegativeInt("CC_GROUP_CHAT_PUSH_BATCH_MS")
 });
 var server;
 try {
@@ -15033,4 +15037,11 @@ function getEnvPositiveInt(name) {
     return;
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+function getEnvNonNegativeInt(name) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "")
+    return;
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
 }

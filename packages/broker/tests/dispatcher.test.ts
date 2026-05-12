@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test'
 import { JSON_RPC_VERSION, METHOD, RPC_ERROR_CODES } from '@cc-group-chat/shared'
 import { Broker, type ConnectionHandle } from '../src/broker.ts'
-import { dispatch, formatRoomEventNotification } from '../src/dispatcher.ts'
+import { dispatch, formatRoomBatchNotification } from '../src/dispatcher.ts'
 
 interface RpcSuccess { jsonrpc: string; id: number | string; result: unknown }
 interface RpcError { jsonrpc: string; id: number | string | null; error: { code: number; message: string; data?: unknown } }
@@ -11,7 +11,7 @@ describe('dispatch', () => {
   let handle: ConnectionHandle
 
   beforeEach(() => {
-    broker = new Broker({ room: { now: () => 1_700_000_000_000 } })
+    broker = new Broker({ room: { now: () => 1_700_000_000_000 }, pushBatchMs: 0 })
     handle = broker.connect(() => {})
   })
 
@@ -36,13 +36,13 @@ describe('dispatch', () => {
     })
   })
 
-  test('routes speak after join and returns SpeakResult', () => {
+  test('routes speak after join and returns SpeakOk', () => {
     send({ jsonrpc: '2.0', id: 1, method: 'join', params: { roomId: 'main', name: 'A', description: '' } })
     const r = send({ jsonrpc: '2.0', id: 2, method: 'speak', params: { text: 'hi' } }) as RpcSuccess
-    const result = r.result as { message: { text: string }; delivered: string[]; everyoneThrottled: boolean }
+    const result = r.result as { ok: boolean; message: { text: string }; delivered: string[] }
+    expect(result.ok).toBe(true)
     expect(result.message.text).toBe('hi')
     expect(result.delivered).toEqual([])
-    expect(result.everyoneThrottled).toBe(false)
   })
 
   test('returns ParseError for invalid JSON', () => {
@@ -97,15 +97,32 @@ describe('dispatch', () => {
   })
 })
 
-describe('formatRoomEventNotification', () => {
-  test('formats a JSON-RPC notification with method=room_event and no id', () => {
-    const event = { id: 1, roomId: 'main', from: 'A', text: 'hi', at: 0, mentions: [] }
-    const parsed = JSON.parse(formatRoomEventNotification(event)) as Record<string, unknown>
+describe('formatRoomBatchNotification', () => {
+  test('formats a JSON-RPC notification with method=room_batch and no id', () => {
+    const batch = {
+      roomId: 'main',
+      messages: [
+        { id: 1, roomId: 'main', from: 'A', text: 'hi', at: 0, mentions: [] },
+      ],
+    }
+    const parsed = JSON.parse(formatRoomBatchNotification(batch)) as Record<string, unknown>
     expect(parsed).toEqual({
       jsonrpc: JSON_RPC_VERSION,
-      method: METHOD.RoomEvent,
-      params: event,
+      method: METHOD.RoomBatch,
+      params: batch,
     })
     expect(parsed.id).toBeUndefined()
+  })
+
+  test('serialises multi-message batches in order', () => {
+    const batch = {
+      roomId: 'main',
+      messages: [
+        { id: 5, roomId: 'main', from: 'A', text: 'one', at: 0, mentions: [] },
+        { id: 6, roomId: 'main', from: 'B', text: 'two', at: 0, mentions: [] },
+      ],
+    }
+    const parsed = JSON.parse(formatRoomBatchNotification(batch)) as { params: { messages: { id: number }[] } }
+    expect(parsed.params.messages.map(m => m.id)).toEqual([5, 6])
   })
 })

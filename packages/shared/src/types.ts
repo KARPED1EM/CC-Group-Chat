@@ -36,14 +36,24 @@ export interface RoomMessage {
   readonly mentions: readonly string[]
 }
 
-/** Outcome of a `Room.speak` call. */
-export interface SpeakResult {
+/** Discriminated union returned by `Broker.speak`. */
+export type SpeakResult = SpeakOk | SpeakRateLimited
+
+export interface SpeakOk {
+  readonly ok: true
   /** The persisted message. */
   readonly message: RoomMessage
-  /** Member names that were woken by this message. */
+  /** Member names that were intended for push delivery (queued or sent). */
   readonly delivered: readonly string[]
-  /** Member names whose per-session wake budget was exhausted; they were not woken. */
-  readonly throttled: readonly string[]
-  /** `true` when the speaker requested `@everyone` but the cooldown blocked the broadcast. */
-  readonly everyoneThrottled: boolean
+}
+
+export interface SpeakRateLimited {
+  readonly ok: false
+  readonly reason: 'rate_limited'
+}
+
+/** A batch of room messages destined for a single recipient connection. */
+export interface RoomBatch {
+  readonly roomId: string
+  readonly messages: readonly RoomMessage[]
 }

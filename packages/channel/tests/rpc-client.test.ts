@@ -17,7 +17,7 @@ describe('RpcClient', () => {
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'cc-rpc-test-'))
-    server = startWsServer(new Broker({ room: { now: () => 1_700_000_000_000 } }))
+    server = startWsServer(new Broker({ room: { now: () => 1_700_000_000_000 }, pushBatchMs: 0 }))
     await writeAuthToken(dir, 'test-token')
     const conn = await connectToBroker({
       stateDir: dir,
@@ -55,7 +55,7 @@ describe('RpcClient', () => {
     expect(((thrown as RpcError).data as { code?: string }).code).toBe('NOT_JOINED')
   })
 
-  test('server-pushed notification fires the handler', async () => {
+  test('server-pushed batch notification fires the handler', async () => {
     await rpc.call(METHOD.Join, { roomId: 'main', name: 'A', description: '' })
 
     const conn2 = await connectToBroker({
@@ -70,10 +70,11 @@ describe('RpcClient', () => {
 
     await new Promise(r => setTimeout(r, 50))
     expect(received).toHaveLength(1)
-    expect(received[0]!.method).toBe(METHOD.RoomEvent)
-    const event = received[0]!.params as { from: string; text: string }
-    expect(event.from).toBe('B')
-    expect(event.text).toBe('@A heads up')
+    expect(received[0]!.method).toBe(METHOD.RoomBatch)
+    const params = received[0]!.params as { roomId: string; messages: Array<{ from: string; text: string }> }
+    expect(params.roomId).toBe('main')
+    expect(params.messages[0]!.from).toBe('B')
+    expect(params.messages[0]!.text).toBe('@A heads up')
   })
 
   test('parallel calls resolve independently with the correct response paired to each id', async () => {

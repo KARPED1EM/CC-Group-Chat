@@ -82,40 +82,19 @@ Updates only land when `plugin.json`'s `version` field changes upstream. Day-to-
 
 ### First tool call is denied without a prompt
 
-Claude Code's "don't ask" mode rejects unfamiliar MCP tools unless they are pre-approved. Add this block to `.claude/settings.local.json` in your project:
+Claude Code's "don't ask" mode rejects unfamiliar MCP tools unless they are pre-approved. Add this block to `.claude/settings.local.json` in your project (or in `~/.claude/settings.json` to allow globally):
 
 ```json
 {
   "permissions": {
     "allow": [
-      "mcp__cc-group-chat__join",
-      "mcp__cc-group-chat__speak",
-      "mcp__cc-group-chat__leave",
-      "mcp__cc-group-chat__read_history",
-      "mcp__cc-group-chat__list_members"
+      "mcp__plugin_cc-group-chat_cc-group-chat__*"
     ]
   }
 }
 ```
 
-Then restart the Claude Code session.
-
-### `/plugin install` fails with `No ED25519 host key is known for github.com`
-
-Your local git is configured to clone GitHub over SSH (likely via a `url.…insteadOf` rule) but your `~/.ssh/known_hosts` does not yet trust `github.com`. Add the host key, then retry `/plugin install`:
-
-```sh
-ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
-```
-
-Or remove the SSH rewrite so git clones via HTTPS:
-
-```sh
-git config --global --unset url."git@github.com:".insteadOf
-git config --global url."https://github.com/".insteadOf "git@github.com:"
-```
-
-This is a local environment issue, not a plugin bug — it affects any GitHub clone over SSH on that machine.
+The wildcard covers all five tools. Then restart the Claude Code session.
 
 ### `EADDRINUSE` when the broker tries to start
 
@@ -127,16 +106,16 @@ Run `/mcp` in the silent window to see whether `cc-group-chat` MCP server is con
 
 ## Configuration
 
-Set on the shell that spawns Claude Code (the broker daemon inherits them). All numeric envs accept positive integers; invalid values fall back to defaults.
+Set on the shell that spawns Claude Code (the broker daemon inherits them). All numeric envs accept positive integers (or zero for `CC_GROUP_CHAT_PUSH_BATCH_MS` only); invalid values fall back to defaults.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `CC_GROUP_CHAT_ROOM` | — | Explicit room id |
 | `CC_GROUP_CHAT_ROOM_FROM_DIR` | — | Path whose `realpath` hash names the room |
 | `CC_GROUP_CHAT_HARD_CAP` | 1000 | Maximum messages stored per room |
-| `CC_GROUP_CHAT_EVERYONE_COOLDOWN_MS` | 60000 | `@everyone` rate limit per room |
-| `CC_GROUP_CHAT_WAKE_BUDGET` | 10 | Per-member wakes allowed within the wake window |
-| `CC_GROUP_CHAT_WAKE_WINDOW_MS` | 300000 | Sliding window for the wake budget |
+| `CC_GROUP_CHAT_RATE_LIMIT_MAX` | 30 | Max messages a single sender may emit within the window |
+| `CC_GROUP_CHAT_RATE_LIMIT_WINDOW_MS` | 60000 | Sliding window for the sender rate limit |
+| `CC_GROUP_CHAT_PUSH_BATCH_MS` | 50 | Flush window during which messages to the same recipient are coalesced into one wake. `0` disables batching (immediate push) |
 
 ## How it works
 

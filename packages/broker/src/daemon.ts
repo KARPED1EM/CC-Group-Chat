@@ -23,12 +23,12 @@ const broker = new Broker({
   authToken,
   room: {
     hardCap: getEnvPositiveInt('CC_GROUP_CHAT_HARD_CAP'),
-    stormGuardOptions: {
-      everyoneIntervalMs: getEnvPositiveInt('CC_GROUP_CHAT_EVERYONE_COOLDOWN_MS'),
-      perMemberWakeBudget: getEnvPositiveInt('CC_GROUP_CHAT_WAKE_BUDGET'),
-      perMemberWindowMs: getEnvPositiveInt('CC_GROUP_CHAT_WAKE_WINDOW_MS'),
-    },
   },
+  rateLimit: {
+    maxPerWindow: getEnvPositiveInt('CC_GROUP_CHAT_RATE_LIMIT_MAX'),
+    windowMs: getEnvPositiveInt('CC_GROUP_CHAT_RATE_LIMIT_WINDOW_MS'),
+  },
+  pushBatchMs: getEnvNonNegativeInt('CC_GROUP_CHAT_PUSH_BATCH_MS'),
 })
 
 let server: RunningWsServer
@@ -70,10 +70,16 @@ function isEAddrInUse(err: unknown): boolean {
   return code === 'EADDRINUSE'
 }
 
-/** Returns undefined when the env var is absent or not a positive integer, letting the caller fall back to its default. */
 function getEnvPositiveInt(name: string): number | undefined {
   const raw = process.env[name]
   if (raw === undefined || raw === '') return undefined
   const n = Number(raw)
   return Number.isInteger(n) && n > 0 ? n : undefined
+}
+
+function getEnvNonNegativeInt(name: string): number | undefined {
+  const raw = process.env[name]
+  if (raw === undefined || raw === '') return undefined
+  const n = Number(raw)
+  return Number.isInteger(n) && n >= 0 ? n : undefined
 }

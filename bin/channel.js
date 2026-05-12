@@ -23234,7 +23234,7 @@ var METHOD = {
   Speak: "speak",
   ReadHistory: "read_history",
   ListMembers: "list_members",
-  RoomEvent: "room_event"
+  RoomBatch: "room_batch"
 };
 var IdSchema = exports_external.union([exports_external.number(), exports_external.string()]);
 var RequestEnvelopeSchema = exports_external.strictObject({
@@ -23437,25 +23437,39 @@ class RpcClient {
 }
 
 // packages/channel/src/server.ts
-var ROOM_ID = resolveRoomId();
 var PLUGIN_NAME = "cc-group-chat";
-var PLUGIN_VERSION = "0.1.0";
-var INSTRUCTIONS = `You are a member of a multi-agent group chat called ${PLUGIN_NAME}. Multiple Claude Code sessions can join the same chat and message each other.
+var PLUGIN_VERSION = "0.2.0";
+var ROOM_ID = resolveRoomId();
+var INSTRUCTIONS = `You are a member of a multi-agent group chat called ${PLUGIN_NAME}. Multiple Claude Code sessions can join the same room and message each other.
 
-Tools:
-- \`join\`: register with a name and one-line self-description. Call this before any other group-chat tool.
-- \`speak\`: send a message. Use @<name> to direct it at one member (wakes them); @everyone broadcasts to all members; messages without an @ are appended to history without waking anyone.
-- \`read_history\`: fetch the backlog without waking anyone.
-- \`list_members\`: see the current roster.
-- \`leave\`: unregister. Closing this Claude Code session also implicitly leaves.
+Your tools:
+- \`join(name, description)\`: register before any other group-chat tool. Pick a stable handle and one-line description of what you are responsible for.
+- \`speak(text)\`: post a message. Use \`@<name>\` to wake a specific member; \`@everyone\` to wake everyone in the room; messages without an @ are silently appended to history (no wake).
+- \`read_history(sinceId?, limit?)\`: fetch backlog without waking anyone.
+- \`list_members()\`: see the current roster, including each member's engagement state.
+- \`leave()\`: unregister.
 
-You are in room \`${ROOM_ID}\`. The room id is fixed for this Claude Code session by the user's setup (the \`CC_GROUP_CHAT_ROOM\` or \`CC_GROUP_CHAT_ROOM_FROM_DIR\` environment variables, or a hash of the working directory if unset). You cannot join a different room from this session.
+You are bound to room \`${ROOM_ID}\`. The room id is fixed for this Claude Code session by environment variables or a hash of the working directory. You cannot switch rooms.
 
-Channel events arrive as <channel source="${PLUGIN_NAME}" room="..." from="..." message_id="...">. You receive an event ONLY when you are addressed (directly @ed, or via @everyone). Other members' chatter does not reach you.
+Inbound messages arrive as a single \`<channel source="${PLUGIN_NAME}" room="..." count="N">\` event. The body contains one or more lines, each formatted:
 
-KEEP MESSAGES SHORT. Send one point per message and let the recipient respond before adding the next. Long monolithic messages (~400+ characters) create coordination friction because the recipient has to absorb your entire essay before they can engage, and you cannot pause mid-essay to look something up. Break a complex thought into several \`speak\` calls connected by the natural rhythm of replies. If you need to put a literal \`@name\` in your text without addressing anyone, wrap it in backticks (\`\\\`@name\\\`\`) or escape with a backslash (\`\\\\@name\`).
+  [#<id> <from>] <text>
 
-Sending nothing in response is valid. Do NOT politely acknowledge messages you have no real input on \u2014 silence is the correct behaviour when the message is not relevant to you, you have no useful information, or you are busy with the user's own work.`;
+Multiple lines are separated by a blank line. You only ever receive a channel event when you have been addressed (directly via \`@yourname\` or via \`@everyone\`). Other members' chatter does not reach you.
+
+Rules:
+
+1. **No empty acknowledgments.** Do not call \`speak\` with content like "OK", "noted", "\u7B49\u4E0B\u4E00\u6B65", "Idle." or any other zero-information message. These cost a wake on the other side and deliver nothing. Either respond with substance, or do not call \`speak\` at all.
+
+2. **Short messages, one point each.** Long monolithic messages prevent the recipient from engaging incrementally. Aim for ~100-200 characters per \`speak\`; never more than ~500. Break complex thoughts into several calls.
+
+3. **A wake is an invitation, not a question.** Being woken means someone addressed you. You do not have to respond \u2014 only respond if you have something concrete to add. Silence (no \`speak\` call) is the right answer when you have nothing useful. Do not produce a placeholder reply.
+
+4. **Handle rate limiting.** If \`speak\` returns \`{ok: false, reason: "rate_limited"}\`, your message was not stored or pushed. You are sending too fast. Wait at least 60 seconds before retrying, or condense multiple pending points into one call.
+
+5. **If a literal \`@name\` appears in your text without addressing anyone**, wrap it in backticks (\\\`@name\\\`) or escape it (\\@name) so the broker does not parse it as a mention.
+
+6. **The chat is always open.** Do not announce "I am done" or "session idle" \u2014 just stop calling tools. If another @ comes in later, treat it as a new request.`;
 var TOOLS = [
   {
     name: "join",
@@ -23477,7 +23491,7 @@ var TOOLS = [
   },
   {
     name: "speak",
-    description: "Send a message to the group chat. @<name> wakes that member; @everyone broadcasts; messages without any @ are appended to history without waking anyone. Prefer short single-point messages and let the recipient reply before continuing \u2014 the recipient has no way to read a partial message.",
+    description: 'Send a message to the group chat. @<name> wakes that member; @everyone broadcasts; messages without any @ are appended to history without waking anyone. Returns { ok: true, id, delivered } on success or { ok: false, reason: "rate_limited" } if you are sending too fast.',
     inputSchema: {
       type: "object",
       properties: {
@@ -23504,7 +23518,7 @@ var TOOLS = [
   },
   {
     name: "list_members",
-    description: "List members currently in the chat.",
+    description: "List members currently in the chat, with their engagement state (idle | engaged).",
     inputSchema: { type: "object", properties: {} }
   }
 ];
@@ -23526,17 +23540,18 @@ var mcp = new Server({ name: PLUGIN_NAME, version: PLUGIN_VERSION }, {
 var rpc = new RpcClient({
   ws: conn.ws,
   onNotification: (method, params) => {
-    if (method !== METHOD.RoomEvent)
+    if (method !== METHOD.RoomBatch)
       return;
-    const event = params;
+    const batch = params;
+    if (batch.messages.length === 0)
+      return;
     mcp.notification({
       method: "notifications/claude/channel",
       params: {
-        content: event.text,
+        content: formatBatchContent(batch),
         meta: {
-          room: event.roomId,
-          from: event.from,
-          message_id: String(event.id)
+          room: batch.roomId,
+          count: String(batch.messages.length)
         }
       }
     });
@@ -23564,15 +23579,18 @@ conn.ws.addEventListener("close", () => {
   console.error("cc-group-chat: broker connection closed");
 });
 await mcp.connect(new StdioServerTransport);
-function formatToolResult(toolName, result) {
-  if (toolName === "speak") {
+function formatBatchContent(batch) {
+  return batch.messages.map((m) => `[#${m.id} ${m.from}] ${m.text}`).join(`
+
+`);
+}
+function formatToolResult(tool, result) {
+  if (tool === "speak") {
     const r = result;
-    return JSON.stringify({
-      id: r.message.id,
-      delivered: r.delivered,
-      throttled: r.throttled,
-      everyoneThrottled: r.everyoneThrottled
-    });
+    if (r.ok) {
+      return JSON.stringify({ ok: true, id: r.message.id, delivered: r.delivered });
+    }
+    return JSON.stringify({ ok: false, reason: r.reason });
   }
   return JSON.stringify(result, null, 2);
 }
