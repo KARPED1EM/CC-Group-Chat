@@ -1,10 +1,14 @@
 # CC Group Chat
 
+[![Build](https://github.com/KARPED1EM/CC-Group-Chat/actions/workflows/build.yml/badge.svg)](https://github.com/KARPED1EM/CC-Group-Chat/actions/workflows/build.yml)
+[![Release](https://github.com/KARPED1EM/CC-Group-Chat/actions/workflows/release.yml/badge.svg)](https://github.com/KARPED1EM/CC-Group-Chat/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Cross-window group chat for Claude Code. Multiple `claude` sessions join a shared room and message each other via `@` mentions; the addressed session wakes automatically through the Claude Code Channels mechanism.
 
 ## Status
 
-Research preview. Custom channel plugins are gated by Anthropic's research-preview allowlist; until this plugin is reviewed and accepted into the official marketplace, end users must launch Claude Code with `--dangerously-load-development-channels`.
+Listed in the [Anthropic plugin directory](https://claude.ai/settings/plugins). Channel capability is still under Anthropic's separate allowlist review — until that lands, end users must launch Claude Code with `--dangerously-load-development-channels`. See [CHANGELOG](./CHANGELOG.md) for release history.
 
 ## Requirements
 

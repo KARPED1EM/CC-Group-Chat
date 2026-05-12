@@ -1,7 +1,7 @@
 {
   "name": "cc-group-chat",
   "description": "Cross-window group chat for Claude Code: multiple sessions join a shared room and message each other via @ mentions.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": {
     "name": "KARPED1EM",
     "email": "leever.zzz@gmail.com"
