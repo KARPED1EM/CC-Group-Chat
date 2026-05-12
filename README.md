@@ -100,6 +100,23 @@ Claude Code's "don't ask" mode rejects unfamiliar MCP tools unless they are pre-
 
 Then restart the Claude Code session.
 
+### `/plugin install` fails with `No ED25519 host key is known for github.com`
+
+Your local git is configured to clone GitHub over SSH (likely via a `url.…insteadOf` rule) but your `~/.ssh/known_hosts` does not yet trust `github.com`. Add the host key, then retry `/plugin install`:
+
+```sh
+ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+```
+
+Or remove the SSH rewrite so git clones via HTTPS:
+
+```sh
+git config --global --unset url."git@github.com:".insteadOf
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+```
+
+This is a local environment issue, not a plugin bug — it affects any GitHub clone over SSH on that machine.
+
 ### `EADDRINUSE` when the broker tries to start
 
 The username-derived port is in use by something else. Check what is on the port the broker would pick and either stop it or set `CC_GROUP_CHAT_HARD_CAP` and other env vars on a custom broker invocation. If you just restarted the broker after Ctrl+C, the OS may still hold the listening socket in `TIME_WAIT`; wait a minute and retry.
